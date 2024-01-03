@@ -5,7 +5,7 @@
 	"minAppVersion": "1.0.0",
 	"description": "Compile complete folder hierarchy in one file",
 	"author": "Thierry Crouzet",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"authorUrl": "https://tcrouzet.com",
+	"fundingUrl": "https://www.paypal.com/donate/?business=MCZTJGYPGXXCW&no_recurring=0&currency_code=EUR",
 	"isDesktopOnly": false
 }
