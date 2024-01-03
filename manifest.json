@@ -1,0 +1,11 @@
+{
+	"id": "folder-fusion",
+	"name": "Folder Fusion",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Compile complete folder hierarchy in one file",
+	"author": "Thierry Crouzet",
+	"authorUrl": "https://obsidian.md",
+	"fundingUrl": "https://obsidian.md/pricing",
+	"isDesktopOnly": false
+}
