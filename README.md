@@ -14,4 +14,4 @@ Put the downloaded files into this folder.
 Restart Obsidian.
 Open Obsidian's settings and find Folder Fusion among Community plugins. Enable the plugin, it's done.
 
-PS: on MacOS, use Commande (⌘) + Shift (⇧) + Point (.) to show hidden files beginning with a point.
+PS: In MacOS Finder, use Commande (⌘) + Shift (⇧) + Point (.) to show hidden files beginning with a point.
