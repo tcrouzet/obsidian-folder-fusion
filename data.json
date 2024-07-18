@@ -1,0 +1,14 @@
+{
+  "noteSeparator": "",
+  "smallcaps": true,
+  "right": true,
+  "newpage": true,
+  "toppara": true,
+  "poem": true,
+  "hardspaces": true,
+  "nocomments": true,
+  "noMDcomments": true,
+  "apostrophe": true,
+  "justif": true,
+  "exclude": "sortspec|_i"
+}
