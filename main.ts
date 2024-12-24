@@ -214,14 +214,16 @@ export default class FolderFusion extends Plugin {
 	}
 
 	poem(content:string) {
-			content = content.replace(/€€(.*?)€€/gs, (match, poem) => {
+		// content = content.replace(/€€(.*?)€€/gs, (match, poem) => {
+		content = content.replace(/€€([\s\S]*?)€€/g, (match, poem) => {
+
 			let paragraphs = poem.split('\n\n');
 		
 			if (paragraphs.length === 1) {
 				return `<div custom-style="poem-solo" class="poem-solo">${paragraphs[0]}</div>\n`;
 			} else {
 				// Appliquer des styles différents au premier, dernier et aux paragraphes intermédiaires
-				let formattedPoem = paragraphs.map((p, index) => {
+				let formattedPoem = paragraphs.map((p: string, index: number) => {
 					if (index === 0) {
 						return `<div custom-style="poem-top" class="poem-top">${p}</div>\n`;
 					} else if (index === paragraphs.length - 1) {
