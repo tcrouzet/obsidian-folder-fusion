@@ -1,0 +1,7 @@
+{
+  "id": "folder-fusion",
+  "name": "Folder Fusion",
+  "author": "Thierry Crouzet",
+  "description": "Compile complete folder hierarchy in one file",
+  "repo": "tcrouzet/obsidian-folder-fusion"
+}
