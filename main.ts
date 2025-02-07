@@ -71,7 +71,7 @@ export default class FolderFusion extends Plugin {
 	async concatenateFiles(folderPath: string): Promise<string> {
 
 		const fusionFileRegex = /fusion-.*-\d{8}-\d{4}\.md$/;
-		const excludeRegex = new RegExp(this.settings.exclude);
+		const excludeRegex = new RegExp(this.settings.exclude, "i");
 
 		const files = this.app.vault.getFiles()
 			.filter(file => 
