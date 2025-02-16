@@ -97,6 +97,7 @@ export default class FolderFusion extends Plugin {
 
 			if(this.settings.noMDcomments){
 				fileContent = fileContent.replace(/%%[\s\S]*?%%\n?/g, '');
+				fileContent = fileContent.replace(/~~[\s\S]*?~~\n?/g, '');
 			}
 
 			if(this.settings.hardspaces){
@@ -332,8 +333,8 @@ class FolderFusionSettingTab extends PluginSettingTab {
 			}));
 
 		new Setting(containerEl)
-		.setName('No Markdown comments')
-		.setDesc('Remove all %%text%%')
+		.setName('No Markdown comments and strikethrough')
+		.setDesc('Remove all %%text%% and ~~text~~')
 		.addToggle(toggle => toggle
 			.setValue(this.plugin.settings.noMDcomments)
 			.onChange(async (value) => {
