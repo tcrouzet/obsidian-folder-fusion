@@ -10,10 +10,8 @@ interface FolderFusionSettings {
 	newpage: boolean;
 	toppara: boolean;
 	poem: boolean;
-	hardspaces: boolean;
 	nocomments: boolean;
 	noMDcomments: boolean;
-	apostrophe: boolean;
 }
 
 const DEFAULT_SETTINGS: FolderFusionSettings = {
@@ -24,10 +22,8 @@ const DEFAULT_SETTINGS: FolderFusionSettings = {
 	newpage: false,
 	toppara: false,
 	poem: false,
-	hardspaces: false,
 	nocomments: true,
-	noMDcomments: true,
-	apostrophe: true
+	noMDcomments: true
 }
 
 export default class FolderFusion extends Plugin {
@@ -100,14 +96,6 @@ export default class FolderFusion extends Plugin {
 				fileContent = fileContent.replace(/~~[\s\S]*?~~\n?/g, '');
 			}
 
-			if(this.settings.hardspaces){
-				fileContent = this.hardspaces(fileContent)
-			}
-
-			if(this.settings.apostrophe){
-				fileContent = this.apostrophes(fileContent);
-			}
-
 			if(this.settings.smallcaps){
 				fileContent = fileContent.replace(/--(.*?)--/g, '<span style="font-variant:small-caps">$1</span>');
 			}
@@ -132,6 +120,9 @@ export default class FolderFusion extends Plugin {
 			concatenatedContent += fileContent + '\n\n'; // Ajouter une séparation entre les fichiers
 			concatenatedContent += this.settings.noteSeparator;
 		}
+
+		// Process notes after concatenation
+		concatenatedContent = this.processNotes(concatenatedContent);
 	
 		return concatenatedContent;
 	}
@@ -149,68 +140,45 @@ export default class FolderFusion extends Plugin {
 		return pathParts[pathParts.length - 1];
 	}
 
-	hardspaces(content: string) {
-		// Extraire les sections HTML et YAML
-		const htmlRegex = /<[^>]*>/g;
-		const yamlRegex = /---[\s\S]+?---/g;
+	processNotes(content: string): string {
+		// return content;
+		// Regex pour trouver les appels de notes et les définitions
+		const noteCallRegex = /\[\^(\d+)\]/g;
+		const noteDefRegex = /\[\^(\d+)\][ \n]*:[ \n]*([^\n]+)/g;
 	
-		let htmlMatches = content.match(htmlRegex) || [];
-		let yamlMatches = content.match(yamlRegex) || [];
+		// Collecter toutes les notes et leurs définitions
+		let notes = new Map();
+		let match;
+		
+		// Extraire toutes les définitions de notes
+		let noneN = 1;
+		while ((match = noteDefRegex.exec(content)) !== null) {
+			const number = parseInt(match[1]);
+			const text = match[2].trim();
+			// alert(number)
+			// alert(text)
+			notes.set(noneN, text);
+			noneN +=1;
+		}
 	
-		// Remplacer ces sections par des marqueurs temporaires
-		content = content.replace(htmlRegex, 'HTML_PLACEHOLDER');
-		content = content.replace(yamlRegex, 'YAML_PLACEHOLDER');
+		// Supprimer les définitions de notes originales
+		content = content.replace(noteDefRegex, '');
 	
-		// Appliquer les règles d'espacement
-		let regex = /(.)([:;?!»])/g;
-		content = content.replace(regex, (match, p1, p2) => {
-			if (p1 === ' ' || p1 === '\u00A0') {
-				return '\u00A0' + p2;
-			}
-			return p1 + '\u00A0' + p2;
+		// Renumérote notes
+		let noteCounter = 1;
+		content = content.replace(noteCallRegex, () => {
+			return `[^${noteCounter++}]`;
 		});
-	
-		regex = /([«—])(.)?/g;
-		content = content.replace(regex, (match, p1, p2) => {
-			if (p2 === ' ' || p2 === '\u00A0') {
-				return p1 + '\u00A0';
-			}
-			return p1 + '\u00A0' + p2;
-		});
-	
-		// Réintégrer les sections HTML et YAML
-		htmlMatches.forEach(placeholder => {
-			content = content.replace('HTML_PLACEHOLDER', placeholder);
-		});
-		yamlMatches.forEach(placeholder => {
-			content = content.replace('YAML_PLACEHOLDER', placeholder);
-		});
-	
-		return content;
-	}
 
-	apostrophes(content: string) {
-		// Extraire les sections HTML et YAML
-		const htmlRegex = /<[^>]*>/g;
-		const yamlRegex = /---[\s\S]+?---/g;
-	
-		let htmlMatches = content.match(htmlRegex) || [];
-		let yamlMatches = content.match(yamlRegex) || [];
-	
-		// Remplacer ces sections par des marqueurs temporaires
-		content = content.replace(htmlRegex, 'HTML_PLACEHOLDER');
-		content = content.replace(yamlRegex, 'YAML_PLACEHOLDER');
+		// Construire les notes et les ajouter à la fin
+		if (notes.size > 0) {
+			let notesText = '';
+			for (let i = 1; i <= notes.size; i++) {
+				notesText += `[^${i}]: ${notes.get(i)}\n\n`;
+			}
+			content = content.trim() + '\n\n' + notesText.trim();
+		}
 
-		content = content.replace(/'/g, "’");
-	
-		// Réintégrer les sections HTML et YAML
-		htmlMatches.forEach(placeholder => {
-			content = content.replace('HTML_PLACEHOLDER', placeholder);
-		});
-		yamlMatches.forEach(placeholder => {
-			content = content.replace('YAML_PLACEHOLDER', placeholder);
-		});
-	
 		return content;
 	}
 
@@ -342,27 +310,6 @@ class FolderFusionSettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			}));
 
-	
-		new Setting(containerEl)
-		.setName('Typographic aposttrophes')
-		.setDesc('Replace \' with ’')
-		.addToggle(toggle => toggle
-			.setValue(this.plugin.settings.apostrophe)
-			.onChange(async (value) => {
-				this.plugin.settings.apostrophe = value;
-				await this.plugin.saveSettings();
-			}));
-
-		new Setting(containerEl)
-		.setName('French hard spaces')
-		.setDesc('Addapt hard spaces before double ponctuations')
-		.addToggle(toggle => toggle
-			.setValue(this.plugin.settings.hardspaces)
-			.onChange(async (value) => {
-				this.plugin.settings.hardspaces = value;
-				await this.plugin.saveSettings();
-			}));
-	
 		new Setting(containerEl)
 		.setName('Exclude')
 		.setDesc('Regex to exclude files and folders.')
