@@ -115,12 +115,9 @@ plugin/
 scripts/
 ├── build.mjs               Development watcher and production build
 ├── test.mjs                Behavior and release tests
-├── check-release.mjs       Tag and artifact validation
-├── publish-release.sh      Publish artifacts from the tagged CI checkout
 └── version-bump.mjs        Manifest and compatibility-map updates
 release.sh                 Increment the patch version, commit, push and tag
 .github/workflows/
-├── ci.yml                  Tests and build for branches and pull requests
 └── release.yml             Publication when a version tag is pushed
 ```
 
@@ -144,9 +141,9 @@ The script runs on the repository's default branch and performs the release sequ
 
 `npm run release` runs the same script. **Both commands commit and push all local changes and start publication.** Review your working tree first. A failed test or build stops before the version changes; a failed Git command stops the sequence immediately. If publication stops after a commit or push, inspect the reported failure and repository state before retrying.
 
-The [CI workflow](.github/workflows/ci.yml) installs locked dependencies, runs tests, builds the plugin and checks the Bash scripts' syntax. The [release workflow](.github/workflows/release.yml) checks out the pushed tag, runs tests and a production build, then calls [scripts/publish-release.sh](scripts/publish-release.sh) to publish `main.js`, `manifest.json` and `styles.css` with generated release notes.
+The single [release workflow](.github/workflows/release.yml) runs when a version tag is pushed. Branch pushes and pull requests do not start a workflow. It checks out the tag, installs locked dependencies, validates versions, runs lint and behavior tests, and builds the plugin using Node.js 26.12.0.
 
-The CI publisher retains the tag's version. It rejects a tag that differs from `manifest.json`, checks that the installable files exist and requires the remote tag through GitHub CLI's `--verify-tag`. The workflow uses GitHub's automatic token with repository-content write permission for the release job. The target repository is configured in [commit.json](commit.json).
+The workflow retains the tag's version and requires both `manifest.json` and `package.json` to match it. It attests the build provenance of `main.js`, `manifest.json` and `styles.css`, then publishes those files with GitHub CLI's `--verify-tag`. GitHub's automatic token grants the build job the permissions needed to publish the release and its attestations. GitHub CLI identifies the repository from the checkout's remote.
 
 Check the **Release** run in GitHub Actions and the resulting release assets. Local tests exercise the release sequence with isolated Git and GitHub commands; publication itself must be verified on GitHub.
 

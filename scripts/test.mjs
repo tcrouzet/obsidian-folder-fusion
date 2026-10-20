@@ -1,12 +1,23 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
+import yaml from 'js-yaml';
+
+const workflow = yaml.load(readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'));
+const releaseSteps = workflow.jobs.build.steps;
+
+function runWorkflowStep(name, fixture, tag) {
+	return spawnSync('bash', ['-c', releaseSteps.find(step => step.name === name).run], {
+		cwd: fixture.directory,
+		env: { ...process.env, PATH: join(fixture.directory, 'bin') + ':' + process.env.PATH, RELEASE_TAG: tag },
+		encoding: 'utf8'
+	});
+}
 
 const module = { exports: {} };
 runInNewContext(transformSync(readFileSync(new URL('../plugin/main.ts', import.meta.url), 'utf8'), {
@@ -94,30 +105,28 @@ test('writes a snapshot inside the selected folder using its name and a UTC time
 	assert.equal(writes[0][1], 'Manuscript');
 });
 
-test('release preflight accepts a matching tag and rejects mismatches or missing artifacts', t => {
-	const directory = mkdtempSync(join(tmpdir(), 'folder-fusion-release-'));
-	t.after(() => rmSync(directory, { recursive: true, force: true }));
-	writeFileSync(join(directory, 'manifest.json'), JSON.stringify({ version: '1.2.3' }));
-	for (const file of ['main.js', 'styles.css']) {
-		writeFileSync(join(directory, file), 'fixture');
+test('only the version tag triggers the single release workflow', () => {
+	assert.deepEqual(readdirSync(new URL('../.github/workflows/', import.meta.url)).filter(file => /\.ya?ml$/.test(file)), ['release.yml']);
+	assert.deepEqual(workflow.on, { push: { tags: ['[0-9]*'] } });
+});
+
+test('CI validates the tag against both manifest and package versions', t => {
+	const fixture = releaseFixture(t);
+	for (const file of ['package.json', 'package-lock.json']) {
+		const contents = fixture.json(file);
+		contents.version = '1.0.3';
+		if (contents.packages) contents.packages[''].version = '1.0.3';
+		writeFileSync(join(fixture.directory, file), JSON.stringify(contents));
 	}
-	const check = tag => spawnSync(process.execPath, [fileURLToPath(new URL('./check-release.mjs', import.meta.url))], {
-		cwd: directory,
-		env: { ...process.env, GITHUB_REF_NAME: tag },
-		encoding: 'utf8'
-	});
-	const valid = check('1.2.3');
-	assert.equal(valid.status, 0, valid.stderr);
-	assert.equal(valid.stdout.trim(), '1.2.3');
-	for (const tag of ['1.2.4', 'v1.2.3', 'invalid']) {
-		const invalid = check(tag);
-		assert.notEqual(invalid.status, 0);
-		assert.match(invalid.stderr, /Release tag must match manifest version/);
-	}
-	rmSync(join(directory, 'main.js'));
-	const missing = check('1.2.3');
-	assert.notEqual(missing.status, 0);
-	assert.match(missing.stderr, /ENOENT.*main\.js/);
+	const valid = runWorkflowStep('Validate and build', fixture, '1.0.3');
+	assert.equal(valid.status, 0, valid.stdout + valid.stderr);
+	const wrongTag = runWorkflowStep('Validate and build', fixture, '1.0.4');
+	assert.notEqual(wrongTag.status, 0);
+	assert.match(wrongTag.stderr, /AssertionError/);
+	writeFileSync(join(fixture.directory, 'manifest.json'), JSON.stringify({ ...fixture.json('manifest.json'), version: '1.0.4' }));
+	const wrongPackage = runWorkflowStep('Validate and build', fixture, '1.0.4');
+	assert.notEqual(wrongPackage.status, 0);
+	assert.match(wrongPackage.stderr, /AssertionError/);
 });
 
 function releaseFixture(t) {
@@ -125,7 +134,7 @@ function releaseFixture(t) {
 	t.after(() => rmSync(directory, { recursive: true, force: true }));
 	mkdirSync(join(directory, 'scripts'));
 	mkdirSync(join(directory, 'bin'));
-	for (const file of ['release.sh', 'scripts/publish-release.sh', 'scripts/check-release.mjs', 'scripts/version-bump.mjs']) {
+	for (const file of ['release.sh', 'scripts/version-bump.mjs']) {
 		copyFileSync(new URL('../' + file, import.meta.url), join(directory, file));
 	}
 	writeFileSync(join(directory, 'manifest.json'), JSON.stringify({ version: '1.0.3', minAppVersion: '1.5.0', description: 'Keep this description' }));
@@ -218,24 +227,15 @@ test('release.sh refuses to tag when the published manifest differs from the loc
 	assert.ok(!fixture.commands().some(args => args[0] === 'git' && args[1] === 'tag'));
 });
 
-test('CI publishes the existing version tag without incrementing it and rejects a mismatch', t => {
+test('CI publishes the existing version tag without incrementing it', t => {
 	const fixture = releaseFixture(t);
 	const manifest = { ...fixture.json('manifest.json'), version: '1.0.4' };
 	writeFileSync(join(fixture.directory, 'manifest.json'), JSON.stringify(manifest));
-	const publish = tag => spawnSync('bash', [join(fixture.directory, 'scripts/publish-release.sh')], {
-		cwd: tmpdir(),
-		env: { ...process.env, PATH: join(fixture.directory, 'bin') + ':' + process.env.PATH, GITHUB_REF_NAME: tag },
-		encoding: 'utf8'
-	});
-	const valid = publish('1.0.4');
+	const valid = runWorkflowStep('Publish plugin', fixture, '1.0.4');
 	assert.equal(valid.status, 0, valid.stdout + valid.stderr);
 	assert.deepEqual(fixture.commands(), [[
 		'gh', 'release', 'create', '1.0.4', 'main.js', 'manifest.json', 'styles.css',
-		'--repo', 'example/folder-fusion', '--verify-tag', '--title', '1.0.4', '--generate-notes'
+		'--verify-tag', '--title', '1.0.4', '--notes', 'Release 1.0.4'
 	]]);
 	assert.deepEqual(fixture.json('manifest.json'), manifest);
-	const invalid = publish('1.0.5');
-	assert.notEqual(invalid.status, 0);
-	assert.match(invalid.stderr, /Release tag must match manifest version/);
-	assert.equal(fixture.commands().length, 1);
 });
