@@ -19,7 +19,7 @@ My novel/
     fusion-My novel-20261020-1430.md
 ```
 
-Folder Fusion reads the selected folder and its subfolders, sorts files by their full paths, and combines their contents. Numeric prefixes help put chapters and sections in the intended order. The generated note sits directly inside the selected folder; source notes stay in place.
+Folder Fusion looks up the selected folder and walks its children and subfolders, without enumerating all files in the vault. It sorts those files by their full paths and combines their contents. Numeric prefixes help put chapters and sections in the intended order. The generated note sits directly inside the selected folder; source notes stay in place.
 
 - **Read a complete draft** without switching between chapters.
 - **Keep dated snapshots** of your work. Generated fusion files are excluded from later compilations.
@@ -85,7 +85,6 @@ Folder Fusion renumbers numeric calls such as `[^1]` in their order of appearanc
 Before compiling a large project, check these limits:
 
 - **Use a folder containing text files.** The current scanner reads every matching file, including attachments; it does not filter by `.md`. Exclude non-text files or keep attachments outside the project folder.
-- **Avoid sibling folders sharing the same prefix.** Selecting `Book` also matches paths beginning with `Book`, such as `Book-old`. Exclude those paths if needed.
 - **Review complex footnotes.** Named footnotes, multiline definitions and repeated references to the same note are not handled as a complete Markdown footnote system.
 - **Check embedded content after export.** The plugin concatenates file contents; it does not resolve embeds or rewrite relative links and attachment paths.
 

@@ -1,4 +1,4 @@
-import { App, TFolder, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, TFile, TFolder, Plugin, PluginSettingTab, Setting } from 'obsidian';
 
 // Remember to rename these classes and interfaces!
 
@@ -69,11 +69,21 @@ export default class FolderFusion extends Plugin {
 		const fusionFileRegex = /fusion-.*-\d{8}-\d{4}\.md$/;
 		const excludeRegex = new RegExp(this.settings.exclude, "i");
 
-		const files = this.app.vault.getFiles()
-			.filter(file => 
-				file.path.startsWith(folderPath) && 
-				!fusionFileRegex.test(file.path)
-			);
+		const folder = this.app.vault.getAbstractFileByPath(folderPath);
+		if (!(folder instanceof TFolder)) {
+			throw new Error(`Folder not found: ${folderPath}`);
+		}
+
+		const files: TFile[] = [];
+		const pending = [...folder.children];
+		while (pending.length) {
+			const entry = pending.pop();
+			if (entry instanceof TFolder) {
+				pending.push(...entry.children);
+			} else if (entry instanceof TFile && !fusionFileRegex.test(entry.path)) {
+				files.push(entry);
+			}
+		}
 
 		const sortedFiles = files.sort((a, b) => a.path.localeCompare(b.path));
 

@@ -20,6 +20,12 @@ function runWorkflowStep(name, fixture, tag) {
 }
 
 const module = { exports: {} };
+class TFile {
+	constructor(path) { this.path = path; }
+}
+class TFolder {
+	constructor(path) { this.path = path; this.children = []; }
+}
 runInNewContext(transformSync(readFileSync(new URL('../plugin/main.ts', import.meta.url), 'utf8'), {
 	loader: 'ts', format: 'cjs'
 }).code, {
@@ -27,7 +33,7 @@ runInNewContext(transformSync(readFileSync(new URL('../plugin/main.ts', import.m
 	exports: module.exports,
 	require: name => {
 		assert.equal(name, 'obsidian');
-		return { Plugin: class {}, PluginSettingTab: class {} };
+		return { Plugin: class {}, PluginSettingTab: class {}, TFile, TFolder };
 	}
 });
 
@@ -35,8 +41,23 @@ async function pluginWithFiles(contents = {}) {
 	const plugin = new module.exports.default();
 	plugin.loadData = async () => null;
 	await plugin.loadSettings();
+	const entries = new Map();
+	function folderAt(path) {
+		if (!entries.has(path)) {
+			const folder = new TFolder(path);
+			entries.set(path, folder);
+			if (path) folderAt(path.split('/').slice(0, -1).join('/')).children.push(folder);
+		}
+		return entries.get(path);
+	}
+	folderAt('');
+	for (const path of Object.keys(contents)) {
+		const file = new TFile(path);
+		entries.set(path, file);
+		folderAt(path.split('/').slice(0, -1).join('/')).children.push(file);
+	}
 	plugin.app = { vault: {
-		getFiles: () => Object.keys(contents).map(path => ({ path })),
+		getAbstractFileByPath: path => entries.get(path) ?? null,
 		read: async file => contents[file.path]
 	} };
 	return plugin;
@@ -52,7 +73,41 @@ test('compiles nested files in path order, excluding snapshots and configured pa
 	});
 	plugin.settings.noteSeparator = '***\n';
 	assert.equal(await plugin.concatenateFiles('Book'), 'First\n\n***\nSecond\n\n***\n');
-	assert.equal(await plugin.concatenateFiles('Empty'), '');
+	plugin.app.vault.getAbstractFileByPath('Book').children = [];
+	assert.equal(await plugin.concatenateFiles('Book'), '');
+});
+
+test('compilation never enumerates the vault or visits sibling folders', async () => {
+	const plugin = await pluginWithFiles({
+		'Book/02-Part/Chapter.md': 'Second',
+		'Book/01.md': 'First',
+		'Book-old/Private.md': 'Private',
+		'Other/Private.md': 'Private'
+	});
+	const selected = plugin.app.vault.getAbstractFileByPath('Book');
+	plugin.app.vault.getFiles = () => { throw new Error('Vault-wide enumeration is forbidden'); };
+	plugin.app.vault.getMarkdownFiles = () => { throw new Error('Vault-wide enumeration is forbidden'); };
+	plugin.app.vault.getAbstractFileByPath = path => {
+		assert.equal(path, 'Book');
+		return selected;
+	};
+	const reads = [];
+	const read = plugin.app.vault.read;
+	plugin.app.vault.read = async file => {
+		reads.push(file.path);
+		assert.ok(file.path.startsWith('Book/'));
+		return read(file);
+	};
+	assert.equal(await plugin.concatenateFiles('Book'), 'First\n\nSecond\n\n');
+	assert.deepEqual(reads, ['Book/01.md', 'Book/02-Part/Chapter.md']);
+});
+
+test('compilation rejects a missing folder or a file path before reading contents', async () => {
+	const plugin = await pluginWithFiles({ 'Book/Chapter.md': 'Text' });
+	plugin.app.vault.read = () => { throw new Error('Unexpected read'); };
+	for (const path of ['Missing', 'Book/Chapter.md']) {
+		await assert.rejects(() => plugin.concatenateFiles(path), /Folder not found/);
+	}
 });
 
 test('removes comments and strikethrough by default, preserving them when disabled', async () => {
