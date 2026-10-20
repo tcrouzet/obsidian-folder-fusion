@@ -41,10 +41,10 @@ export default class FolderFusion extends Plugin {
 				// Ajouter une commande d'exportation au menu contextuel
 				menu.addItem((item) => {
 					item.setTitle('Folder fusion')
-					   .onClick(() => {
-						   // Appeler votre fonction d'exportation ici
-						   this.exportFolder(file.path);
-					   });
+						.onClick(() => {
+							// Appeler votre fonction d'exportation ici
+							this.exportFolder(file.path);
+						});
 				});
 
 				/*menu.addItem((item) => {
@@ -147,16 +147,13 @@ export default class FolderFusion extends Plugin {
 		const noteDefRegex = /\[\^(\d+)\][ \n]*:[ \n]*([^\n]+)/g;
 	
 		// Collecter toutes les notes et leurs définitions
-		let notes = new Map();
+		const notes = new Map();
 		let match;
 		
 		// Extraire toutes les définitions de notes
 		let noneN = 1;
 		while ((match = noteDefRegex.exec(content)) !== null) {
-			const number = parseInt(match[1]);
 			const text = match[2].trim();
-			// alert(number)
-			// alert(text)
 			notes.set(noneN, text);
 			noneN +=1;
 		}
@@ -186,13 +183,13 @@ export default class FolderFusion extends Plugin {
 		// content = content.replace(/€€(.*?)€€/gs, (match, poem) => {
 		content = content.replace(/€€([\s\S]*?)€€/g, (match, poem) => {
 
-			let paragraphs = poem.split('\n\n');
+			const paragraphs = poem.split('\n\n');
 		
 			if (paragraphs.length === 1) {
 				return `<div custom-style="poem-solo" class="poem-solo">${paragraphs[0]}</div>\n`;
 			} else {
 				// Appliquer des styles différents au premier, dernier et aux paragraphes intermédiaires
-				let formattedPoem = paragraphs.map((p: string, index: number) => {
+				const formattedPoem = paragraphs.map((p: string, index: number) => {
 					if (index === 0) {
 						return `<div custom-style="poem-top" class="poem-top">${p}</div>\n`;
 					} else if (index === paragraphs.length - 1) {
@@ -238,7 +235,7 @@ class FolderFusionSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		const titleEl = containerEl.createEl('h2', { text: 'Folder Fusion settings' });
+		containerEl.createEl('h2', { text: 'Folder Fusion settings' });
 
 		new Setting(containerEl)
 			.setName('Small caps')
