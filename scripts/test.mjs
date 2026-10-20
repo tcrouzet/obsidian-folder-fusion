@@ -3,10 +3,30 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
 import yaml from 'js-yaml';
+
+const require = createRequire(import.meta.url);
+const { Linter } = require('eslint');
+const sourcePath = fileURLToPath(new URL('../plugin/main.ts', import.meta.url));
+const source = readFileSync(sourcePath, 'utf8');
+
+test('source handles promises and avoids unsafe values under type-aware lint rules', () => {
+	const linter = new Linter();
+	linter.defineParser('@typescript-eslint/parser', require('@typescript-eslint/parser'));
+	const rules = require('@typescript-eslint/eslint-plugin').rules;
+	const names = ['no-floating-promises', 'no-misused-promises', 'no-unsafe-assignment', 'no-unsafe-call', 'no-unsafe-member-access', 'no-unsafe-return'];
+	for (const name of names) linter.defineRule('@typescript-eslint/' + name, rules[name]);
+	assert.deepEqual(linter.verify(source, {
+		parser: '@typescript-eslint/parser',
+		parserOptions: { sourceType: 'module', project: './tsconfig.json', tsconfigRootDir: fileURLToPath(new URL('..', import.meta.url)) },
+		rules: Object.fromEntries(names.map(name => ['@typescript-eslint/' + name, 'error']))
+	}, sourcePath), []);
+});
 
 const workflow = yaml.load(readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'));
 const releaseSteps = workflow.jobs.build.steps;
@@ -20,20 +40,38 @@ function runWorkflowStep(name, fixture, tag) {
 }
 
 const module = { exports: {} };
+const notices = [];
+class Setting {
+	constructor(container) { this.row = {}; container.rows.push(this.row); }
+	setName(name) { this.row.name = name; return this; }
+	setDesc(desc) { this.row.desc = desc; return this; }
+	addControl(type, callback) {
+		const row = this.row;
+		row.type = type;
+		callback({
+			setValue(value) { row.value = value; return this; },
+			setPlaceholder(value) { row.placeholder = value; return this; },
+			onChange(change) { row.change = change; return this; }
+		});
+		return this;
+	}
+	addToggle(callback) { return this.addControl('toggle', callback); }
+	addText(callback) { return this.addControl('text', callback); }
+}
 class TFile {
 	constructor(path) { this.path = path; }
 }
 class TFolder {
 	constructor(path) { this.path = path; this.children = []; }
 }
-runInNewContext(transformSync(readFileSync(new URL('../plugin/main.ts', import.meta.url), 'utf8'), {
+runInNewContext(transformSync(source + '\nexport { FolderFusionSettingTab };', {
 	loader: 'ts', format: 'cjs'
 }).code, {
 	module,
 	exports: module.exports,
 	require: name => {
 		assert.equal(name, 'obsidian');
-		return { Plugin: class {}, PluginSettingTab: class {}, TFile, TFolder };
+		return { Plugin: class {}, PluginSettingTab: class {}, TFile, TFolder, Setting, Notice: class { constructor(message) { notices.push(message); } } };
 	}
 });
 
@@ -62,6 +100,85 @@ async function pluginWithFiles(contents = {}) {
 	} };
 	return plugin;
 }
+
+test('export waits for snapshot writing and propagates read and write failures', async () => {
+	const plugin = await pluginWithFiles({ 'Book/Chapter.md': 'Text' });
+	let finishWrite;
+	plugin.app.vault.adapter = { write: () => new Promise(resolve => { finishWrite = resolve; }) };
+	let finished = false;
+	const exported = plugin.exportFolder('Book').then(() => { finished = true; });
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(finished, false);
+	finishWrite();
+	await exported;
+	const writeError = new Error('Cannot write snapshot');
+	plugin.app.vault.adapter.write = () => Promise.reject(writeError);
+	await assert.rejects(() => plugin.exportFolder('Book'), error => error === writeError);
+	plugin.app.vault.adapter.write = () => { throw new Error('Unexpected write'); };
+	const readError = new Error('Cannot read chapter');
+	plugin.app.vault.read = () => Promise.reject(readError);
+	await assert.rejects(() => plugin.exportFolder('Book'), error => error === readError);
+});
+
+test('folder menu reports export failures to the user', async () => {
+	const plugin = await pluginWithFiles({ 'Book/Chapter.md': 'Text' });
+	let onMenu;
+	plugin.app.workspace = { on: (name, callback) => { assert.equal(name, 'file-menu'); onMenu = callback; } };
+	const tabs = [];
+	plugin.addSettingTab = tab => tabs.push(tab);
+	plugin.registerEvent = () => {};
+	await plugin.onload();
+	assert.equal(tabs.length, 1);
+	let onClick;
+	onMenu({ addItem: callback => callback({ setTitle() { return this; }, onClick(callback) { onClick = callback; } }) }, plugin.app.vault.getAbstractFileByPath('Book'));
+	plugin.app.vault.read = () => Promise.reject(new Error('Cannot read chapter'));
+	notices.length = 0;
+	onClick();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(notices.length, 1);
+	assert.match(notices[0], /Cannot read chapter/);
+});
+
+test('settings are searchable and legacy controls still persist every existing option', async () => {
+	const plugin = await pluginWithFiles();
+	const tab = new module.exports.FolderFusionSettingTab({}, plugin);
+	const definitions = tab.getSettingDefinitions();
+	assert.deepEqual(Array.from(definitions, definition => definition.control.key).sort(), Object.keys(plugin.settings).sort());
+	const rows = [];
+	tab.containerEl = { rows, empty: () => { rows.length = 0; }, createEl: () => { throw new Error('Unexpected HTML heading'); } };
+	let saved;
+	plugin.saveData = async value => { saved = { ...value }; };
+	tab.display();
+	assert.equal(rows.length, definitions.length);
+	for (const [index, definition] of definitions.entries()) {
+		const row = rows[index];
+		const key = definition.control.key;
+		assert.equal(row.name, definition.name);
+		assert.equal(row.type, definition.control.type);
+		assert.equal(row.value, plugin.settings[key]);
+		const value = typeof row.value === 'boolean' ? !row.value : 'test';
+		await row.change(value);
+		assert.equal(plugin.settings[key], value);
+		assert.deepEqual(saved, { ...plugin.settings });
+	}
+});
+
+test('settings loading preserves valid saved values and defaults invalid values', async () => {
+	const plugin = await pluginWithFiles();
+	const defaults = { ...plugin.settings };
+	for (const data of [null, [], 'invalid', { smallcaps: 'true', exclude: false, noteSeparator: 42 }]) {
+		plugin.loadData = async () => data;
+		await plugin.loadSettings();
+		assert.deepEqual({ ...plugin.settings }, defaults);
+	}
+	const saved = Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, typeof value === 'boolean' ? !value : 'Saved text']));
+	plugin.loadData = async () => saved;
+	await plugin.loadSettings();
+	assert.deepEqual({ ...plugin.settings }, saved);
+	const error = new Error('Cannot read settings');
+	plugin.loadData = () => Promise.reject(error);
+	await assert.rejects(() => plugin.loadSettings(), caught => caught === error);
+});
 
 test('compiles nested files in path order, excluding snapshots and configured paths', async () => {
 	const plugin = await pluginWithFiles({

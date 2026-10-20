@@ -1,4 +1,5 @@
-import { App, TFile, TFolder, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, TFile, TFolder, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
+import type { SettingDefinitionControl } from 'obsidian';
 
 // Remember to rename these classes and interfaces!
 
@@ -42,8 +43,9 @@ export default class FolderFusion extends Plugin {
 				menu.addItem((item) => {
 					item.setTitle('Folder fusion')
 						.onClick(() => {
-							// Appeler votre fonction d'exportation ici
-							this.exportFolder(file.path);
+							this.exportFolder(file.path).catch((error: unknown) => {
+								new Notice(`Folder fusion failed: ${error instanceof Error ? error.message : String(error)}`);
+							});
 						});
 				});
 
@@ -58,10 +60,9 @@ export default class FolderFusion extends Plugin {
 		}));
 	}
 
-	async exportFolder(folderPath:string){
-		this.concatenateFiles(folderPath).then(result => {
-			this.savingFiles(folderPath,result)
-		});
+	async exportFolder(folderPath: string): Promise<void> {
+		const result = await this.concatenateFiles(folderPath);
+		await this.savingFiles(folderPath, result);
 	}
 
 	async concatenateFiles(folderPath: string): Promise<string> {
@@ -157,7 +158,7 @@ export default class FolderFusion extends Plugin {
 		const noteDefRegex = /\[\^(\d+)\][ \n]*:[ \n]*([^\n]+)/g;
 	
 		// Collecter toutes les notes et leurs définitions
-		const notes = new Map();
+		const notes = new Map<number, string>();
 		let match;
 		
 		// Extraire toutes les définitions de notes
@@ -189,9 +190,9 @@ export default class FolderFusion extends Plugin {
 		return content;
 	}
 
-	poem(content:string) {
+	poem(content: string): string {
 		// content = content.replace(/€€(.*?)€€/gs, (match, poem) => {
-		content = content.replace(/€€([\s\S]*?)€€/g, (match, poem) => {
+		content = content.replace(/€€([\s\S]*?)€€/g, (_match: string, poem: string) => {
 
 			const paragraphs = poem.split('\n\n');
 		
@@ -220,7 +221,18 @@ export default class FolderFusion extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const data: unknown = await this.loadData();
+		this.settings = { ...DEFAULT_SETTINGS };
+		if (typeof data !== 'object' || data === null) return;
+
+		for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof FolderFusionSettings)[]) {
+			const value = (data as Record<string, unknown>)[key];
+			if (key === 'noteSeparator' || key === 'exclude') {
+				if (typeof value === 'string') this.settings[key] = value;
+			} else if (typeof value === 'boolean') {
+				this.settings[key] = value;
+			}
+		}
 	}
 
 	async saveSettings() {
@@ -240,103 +252,77 @@ class FolderFusionSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	getSettingDefinitions(): SettingDefinitionControl<keyof FolderFusionSettings>[] {
+		return [
+			{
+				name: 'Small caps',
+				desc: 'Convert --text-- into Pandoc HTML small caps',
+				control: { type: 'toggle', key: 'smallcaps' }
+			},
+			{
+				name: 'Apply right style',
+				desc: 'Convert @@paragraph into Pandoc HTML align right',
+				control: { type: 'toggle', key: 'right' }
+			},
+			{
+				name: 'Applys top-para style',
+				desc: 'Convert ££paragraph into Pandoc Docx top-para',
+				control: { type: 'toggle', key: 'toppara' }
+			},
+			{
+				name: 'Applys poem style',
+				desc: 'Convert €€paragraph into Pandoc Docx poem',
+				control: { type: 'toggle', key: 'poem' }
+			},
+			{
+				name: 'New page',
+				desc: 'Convert \\newpage into word stype page-break',
+				control: { type: 'toggle', key: 'newpage' }
+			},
+			{
+				name: 'No HTML comments',
+				desc: 'Remove all <!-- text -->',
+				control: { type: 'toggle', key: 'nocomments' }
+			},
+			{
+				name: 'No Markdown comments and strikethrough',
+				desc: 'Remove all %%text%% and ~~text~~',
+				control: { type: 'toggle', key: 'noMDcomments' }
+			},
+			{
+				name: 'Exclude',
+				desc: 'Regex to exclude files and folders.',
+				control: { type: 'text', key: 'exclude', placeholder: 'Enter your files and folders' }
+			},
+			{
+				name: 'Note separator',
+				desc: 'You can use Latex \\newpage for example.',
+				control: { type: 'text', key: 'noteSeparator', placeholder: 'Enter your separator' }
+			}
+		];
+	}
+
 	display(): void {
-		const {containerEl} = this;
-
-		containerEl.empty();
-
-		containerEl.createEl('h2', { text: 'Folder Fusion settings' });
-
-		new Setting(containerEl)
-			.setName('Small caps')
-			.setDesc('Convert --text-- into Pandoc HTML small caps')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.smallcaps)
-				.onChange(async (value) => {
-					this.plugin.settings.smallcaps = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-		.setName('Apply right style')
-		.setDesc('Convert @@paragraph into Pandoc HTML align right')
-		.addToggle(toggle => toggle
-			.setValue(this.plugin.settings.right)
-			.onChange(async (value) => {
-				this.plugin.settings.right = value;
-				await this.plugin.saveSettings();
-			}));
-
-		new Setting(containerEl)
-		.setName('Applys top-para style')
-		.setDesc('Convert ££paragraph into Pandoc Docx top-para')
-		.addToggle(toggle => toggle
-			.setValue(this.plugin.settings.toppara)
-			.onChange(async (value) => {
-				this.plugin.settings.toppara = value;
-				await this.plugin.saveSettings();
-			}));
-
-		new Setting(containerEl)
-		.setName('Applys poem style')
-		.setDesc('Convert €€paragraph into Pandoc Docx poem')
-		.addToggle(toggle => toggle
-			.setValue(this.plugin.settings.poem)
-			.onChange(async (value) => {
-				this.plugin.settings.poem = value;
-				await this.plugin.saveSettings();
-			}));
-
-		new Setting(containerEl)
-		.setName('New page')
-		.setDesc('Convert \\newpage into word stype page-break')
-		.addToggle(toggle => toggle
-			.setValue(this.plugin.settings.newpage)
-			.onChange(async (value) => {
-				this.plugin.settings.newpage = value;
-				await this.plugin.saveSettings();
-			}));
-
-		new Setting(containerEl)
-		.setName('No HTML comments')
-		.setDesc('Remove all <!-- text -->')
-		.addToggle(toggle => toggle
-			.setValue(this.plugin.settings.nocomments)
-			.onChange(async (value) => {
-				this.plugin.settings.nocomments = value;
-				await this.plugin.saveSettings();
-			}));
-
-		new Setting(containerEl)
-		.setName('No Markdown comments and strikethrough')
-		.setDesc('Remove all %%text%% and ~~text~~')
-		.addToggle(toggle => toggle
-			.setValue(this.plugin.settings.noMDcomments)
-			.onChange(async (value) => {
-				this.plugin.settings.noMDcomments = value;
-				await this.plugin.saveSettings();
-			}));
-
-		new Setting(containerEl)
-		.setName('Exclude')
-		.setDesc('Regex to exclude files and folders.')
-		.addText(text => text
-			.setPlaceholder('Enter your files and folders')
-			.setValue(this.plugin.settings.exclude)
-			.onChange(async (value) => {
-				this.plugin.settings.exclude = value;
-				await this.plugin.saveSettings();
-			}));
-
-		new Setting(containerEl)
-			.setName('Note separator')
-			.setDesc('You can use Latex \\newpage for example.')
-			.addText(text => text
-				.setPlaceholder('Enter your separator')
-				.setValue(this.plugin.settings.noteSeparator)
-				.onChange(async (value) => {
-					this.plugin.settings.noteSeparator = value;
-					await this.plugin.saveSettings();
-				}));
+		this.containerEl.empty();
+		for (const { name, desc, control } of this.getSettingDefinitions()) {
+			const setting = new Setting(this.containerEl).setName(name).setDesc(desc ?? '');
+			const key = control.key;
+			if (key === 'exclude' || key === 'noteSeparator') {
+				setting.addText(text => text
+					.setPlaceholder(control.type === 'text' ? control.placeholder ?? '' : '')
+					.setValue(this.plugin.settings[key])
+					.onChange(async value => {
+						this.plugin.settings[key] = value;
+						await this.plugin.saveSettings();
+					}));
+			} else {
+				setting.addToggle(toggle => toggle
+					.setValue(this.plugin.settings[key])
+					.onChange(async value => {
+						this.plugin.settings[key] = value;
+						await this.plugin.saveSettings();
+					}));
+			}
+		}
 	}
 }

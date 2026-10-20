@@ -53,6 +53,8 @@ The result is a Markdown note. To produce formats such as DOCX or PDF, use your 
 
 ## Choose what goes into the manuscript
 
+Open **Settings → Folder Fusion** to configure the manuscript. On Obsidian 1.13 or later, these options also appear in settings search. Earlier supported versions retain the same controls in the plugin's settings tab.
+
 | Setting | Default | Effect on the output |
 | --- | --- | --- |
 | **Exclude** | `sortspec\|_i` | Excludes files whose full paths match this case-insensitive regular expression. |
