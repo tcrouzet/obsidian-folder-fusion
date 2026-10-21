@@ -45,10 +45,12 @@ class Setting {
 	constructor(container) { this.row = {}; container.rows.push(this.row); }
 	setName(name) { this.row.name = name; return this; }
 	setDesc(desc) { this.row.desc = desc; return this; }
+	setHeading() { this.row.heading = true; return this; }
 	addControl(type, callback) {
 		const row = this.row;
 		row.type = type;
 		callback({
+			inputEl: row.inputEl = {},
 			setValue(value) { row.value = value; return this; },
 			setPlaceholder(value) { row.placeholder = value; return this; },
 			onChange(change) { row.change = change; return this; }
@@ -60,15 +62,25 @@ class Setting {
 }
 class TFile {
 	constructor(path) { this.path = path; }
+	get name() { return this.path.split('/').pop(); }
+	get extension() { return this.name.includes('.') ? this.name.slice(this.name.lastIndexOf('.') + 1) : ''; }
+	get basename() { return this.extension ? this.name.slice(0, -this.extension.length - 1) : this.name; }
 }
 class TFolder {
 	constructor(path) { this.path = path; this.children = []; }
+	get name() { return this.path.split('/').pop(); }
 }
 runInNewContext(transformSync(source + '\nexport { FolderFusionSettingTab };', {
 	loader: 'ts', format: 'cjs'
 }).code, {
 	module,
 	exports: module.exports,
+	crypto: globalThis.crypto,
+	createFragment: callback => {
+		const fragment = { children: [], appendText(text) { this.children.push(text); }, createEl(tag, attributes) { this.children.push({ tag, ...attributes }); } };
+		callback(fragment);
+		return fragment;
+	},
 	require: name => {
 		assert.equal(name, 'obsidian');
 		return { Plugin: class {}, PluginSettingTab: class {}, TFile, TFolder, Setting, Notice: class { constructor(message) { notices.push(message); } } };
@@ -80,11 +92,15 @@ async function pluginWithFiles(contents = {}) {
 	plugin.loadData = async () => null;
 	await plugin.loadSettings();
 	const entries = new Map();
+	const fileContents = new Map();
 	function folderAt(path) {
 		if (!entries.has(path)) {
 			const folder = new TFolder(path);
 			entries.set(path, folder);
-			if (path) folderAt(path.split('/').slice(0, -1).join('/')).children.push(folder);
+			if (path) {
+				folder.parent = folderAt(path.split('/').slice(0, -1).join('/'));
+				folder.parent.children.push(folder);
+			}
 		}
 		return entries.get(path);
 	}
@@ -92,11 +108,26 @@ async function pluginWithFiles(contents = {}) {
 	for (const path of Object.keys(contents)) {
 		const file = new TFile(path);
 		entries.set(path, file);
-		folderAt(path.split('/').slice(0, -1).join('/')).children.push(file);
+		fileContents.set(file, contents[path]);
+		file.parent = folderAt(path.split('/').slice(0, -1).join('/'));
+		file.parent.children.push(file);
 	}
 	plugin.app = { vault: {
 		getAbstractFileByPath: path => entries.get(path) ?? null,
-		read: async file => contents[file.path]
+		read: async file => fileContents.get(file)
+	}, fileManager: {
+		renameFile: async (file, path) => {
+			assert.equal(path.split('/').slice(0, -1).join('/'), file.parent.path);
+			assert.ok(!entries.has(path) || entries.get(path) === file, 'Rename must never overwrite another item');
+			const original = file.path;
+			const moved = [file];
+			for (const entry of moved) if (entry instanceof TFolder) moved.push(...entry.children);
+			for (const entry of moved) entries.delete(entry.path);
+			for (const entry of moved) {
+				entry.path = path + entry.path.slice(original.length);
+				entries.set(entry.path, entry);
+			}
+		}
 	} };
 	return plugin;
 }
@@ -130,7 +161,7 @@ test('folder menu reports export failures to the user', async () => {
 	await plugin.onload();
 	assert.equal(tabs.length, 1);
 	let onClick;
-	onMenu({ addItem: callback => callback({ setTitle() { return this; }, onClick(callback) { onClick = callback; } }) }, plugin.app.vault.getAbstractFileByPath('Book'));
+	onMenu({ addItem: callback => callback({ setTitle(title) { this.title = title; return this; }, onClick(callback) { if (this.title === 'Folder fusion') onClick = callback; } }) }, plugin.app.vault.getAbstractFileByPath('Book'));
 	plugin.app.vault.read = () => Promise.reject(new Error('Cannot read chapter'));
 	notices.length = 0;
 	onClick();
@@ -142,22 +173,42 @@ test('folder menu reports export failures to the user', async () => {
 test('settings are searchable and legacy controls still persist every existing option', async () => {
 	const plugin = await pluginWithFiles();
 	const tab = new module.exports.FolderFusionSettingTab({}, plugin);
-	const definitions = tab.getSettingDefinitions();
+	const groups = tab.getSettingDefinitions();
+	assert.deepEqual(Array.from(groups, group => [group.type, group.heading]), [['group', 'Fusion'], ['group', 'Numbering'], ['group', 'Exclude']]);
+	assert.deepEqual(Array.from(groups[1].items, definition => definition.control.key), ['numberingStart', 'numberingIncrement', 'numberingSeparator', 'numberFolders']);
+	assert.deepEqual(Array.from(groups[2].items, definition => definition.control.key), ['excludeCharacters', 'excludeNames', 'debug']);
+	const definitions = Array.from(groups).flatMap(group => Array.from(group.items));
 	assert.deepEqual(Array.from(definitions, definition => definition.control.key).sort(), Object.keys(plugin.settings).sort());
 	const rows = [];
-	tab.containerEl = { rows, empty: () => { rows.length = 0; }, createEl: () => { throw new Error('Unexpected HTML heading'); } };
+	tab.containerEl = { rows, empty: () => { rows.length = 0; }, addClass: () => {}, createEl: () => { throw new Error('Unexpected HTML heading'); } };
 	let saved;
 	plugin.saveData = async value => { saved = { ...value }; };
 	tab.display();
-	assert.equal(rows.length, definitions.length);
+	assert.deepEqual(rows.map(row => row.name), Array.from(groups).flatMap(group => [group.heading, ...Array.from(group.items, definition => definition.name)]));
+	assert.deepEqual(rows.filter(row => row.heading).map(row => row.name), ['Fusion', 'Numbering', 'Exclude']);
+	const controls = rows.filter(row => !row.heading);
+	const debug = rows.at(-1);
+	assert.equal(debug.name, 'Debug');
+	assert.equal(debug.type, 'toggle');
+	assert.equal(debug.value, false);
+	await debug.change(true);
+	assert.equal(saved.debug, true);
+	plugin.loadData = async () => saved;
+	await plugin.loadSettings();
+	assert.equal(plugin.settings.debug, true);
+	await debug.change(false);
+	assert.equal(plugin.settings.debug, false);
+	const link = controls.find(row => row.name === 'Exclude files/folders').desc.children.at(-1);
+	assert.deepEqual({ ...link }, { tag: 'a', text: 'Custom Sort', href: 'https://community.obsidian.md/plugins/custom-sort' });
+	assert.equal(controls.length, definitions.length);
 	for (const [index, definition] of definitions.entries()) {
-		const row = rows[index];
+		const row = controls[index];
 		const key = definition.control.key;
 		assert.equal(row.name, definition.name);
-		assert.equal(row.type, definition.control.type);
-		assert.equal(row.value, plugin.settings[key]);
-		const value = typeof row.value === 'boolean' ? !row.value : 'test';
-		await row.change(value);
+		assert.equal(row.inputEl.type ?? row.type, definition.control.type);
+		assert.equal(row.value, definition.control.type === 'number' ? String(plugin.settings[key]) : plugin.settings[key]);
+		const value = definition.control.type === 'number' ? 7 : typeof row.value === 'boolean' ? !row.value : 'test';
+		await row.change(definition.control.type === 'number' ? String(value) : value);
 		assert.equal(plugin.settings[key], value);
 		assert.deepEqual(saved, { ...plugin.settings });
 	}
@@ -166,18 +217,338 @@ test('settings are searchable and legacy controls still persist every existing o
 test('settings loading preserves valid saved values and defaults invalid values', async () => {
 	const plugin = await pluginWithFiles();
 	const defaults = { ...plugin.settings };
-	for (const data of [null, [], 'invalid', { smallcaps: 'true', exclude: false, noteSeparator: 42 }]) {
+	for (const data of [null, [], 'invalid', { smallcaps: 'true', excludeCharacters: false, excludeNames: 42, noteSeparator: 42 }, { numberingStart: -1 }, { numberingStart: 1.5 }, { numberingStart: Number.MAX_SAFE_INTEGER + 1 }, { numberingIncrement: 0 }, { numberingIncrement: -1 }, { numberingIncrement: 1.5 }, { numberingIncrement: Number.MAX_SAFE_INTEGER + 1 }]) {
 		plugin.loadData = async () => data;
 		await plugin.loadSettings();
 		assert.deepEqual({ ...plugin.settings }, defaults);
 	}
-	const saved = Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, typeof value === 'boolean' ? !value : 'Saved text']));
+	const saved = Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, typeof value === 'number' ? value + 1 : typeof value === 'boolean' ? !value : 'Saved text']));
 	plugin.loadData = async () => saved;
 	await plugin.loadSettings();
 	assert.deepEqual({ ...plugin.settings }, saved);
 	const error = new Error('Cannot read settings');
 	plugin.loadData = () => Promise.reject(error);
 	await assert.rejects(() => plugin.loadSettings(), caught => caught === error);
+});
+
+test('shared exclusions default to underscores anywhere and exact sortspec names', async () => {
+	const plugin = await pluginWithFiles({
+		'Book/Alpha.md': 'Alpha', 'Book/_Draft.md': 'Draft', 'Book/Work_notes.md': 'Notes',
+		'Book/Part_notes/Child.md': 'Child', 'Book/sortspec.md': 'Sort',
+		'Book/sortspec/Child.md': 'Sort child', 'Book/sortspec-notes.md': 'Included'
+	});
+	assert.equal(plugin.settings.numberingSeparator, '-');
+	assert.equal(plugin.settings.excludeCharacters, '_');
+	assert.equal(plugin.settings.excludeNames, 'sortspec');
+	plugin.settings.numberFolders = true;
+	assert.equal(await plugin.concatenateFiles('Book'), 'Alpha\n\nIncluded\n\n');
+	assert.equal(await plugin.numberFolder('Book'), 2);
+	for (const path of ['Book/1-Alpha.md', 'Book/2-sortspec-notes.md', 'Book/_Draft.md', 'Book/Work_notes.md', 'Book/Part_notes/Child.md', 'Book/sortspec.md', 'Book/sortspec/Child.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+});
+
+test('shared character exclusions are literal characters anywhere and empty filters exclude nothing', async () => {
+	const plugin = await pluginWithFiles({
+		'Book/Alpha.md': 'Alpha', 'Book/[Draft.md': 'Draft', 'Book/Notes].md': 'Notes', 'Book/A😀B.md': 'Emoji'
+	});
+	plugin.settings.excludeCharacters = '[]😀';
+	assert.equal(await plugin.concatenateFiles('Book'), 'Alpha\n\n');
+	assert.equal(await plugin.numberFolder('Book'), 1);
+	for (const path of ['Book/1-Alpha.md', 'Book/[Draft.md', 'Book/Notes].md', 'Book/A😀B.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+	const unfiltered = await pluginWithFiles({ 'Book/Work_notes.md': 'Notes', 'Book/sortspec.md': 'Sort', 'Book/fusion-Book-20251001-1200.md': 'Snapshot' });
+	unfiltered.settings.excludeCharacters = '';
+	unfiltered.settings.excludeNames = '';
+	assert.equal(await unfiltered.concatenateFiles('Book'), 'Sort\n\nNotes\n\n');
+	assert.equal(await unfiltered.numberFolder('Book'), 2);
+	assert.ok(unfiltered.app.vault.getAbstractFileByPath('Book/1-sortspec.md'));
+	assert.ok(unfiltered.app.vault.getAbstractFileByPath('Book/2-Work_notes.md'));
+	assert.ok(unfiltered.app.vault.getAbstractFileByPath('Book/fusion-Book-20251001-1200.md'));
+});
+
+test('shared name exclusions match whole names with optional extensions and prune folders', async () => {
+	const plugin = await pluginWithFiles({
+		'Book/Alpha.md': 'Alpha', 'Book/Skip.md': 'Skip', 'Book/Skip.txt': 'Text',
+		'Book/Research/Child.md': 'Child', 'Book/Research notes.md': 'Research notes',
+		'Book/[Draft].md': 'Draft', 'Book/archive.tar.gz': 'Archive', 'Book-old/Private.md': 'Private'
+	});
+	plugin.settings.numberFolders = true;
+	plugin.settings.excludeNames = ' skip.md, RESEARCH, [Draft], archive.tar.gz, ';
+	const lookup = plugin.app.vault.getAbstractFileByPath;
+	Object.defineProperty(lookup('Book/Research'), 'children', { get() { throw new Error('Excluded folders must not be traversed'); } });
+	assert.equal(await plugin.concatenateFiles('Book'), 'Alpha\n\nResearch notes\n\nText\n\n');
+	assert.equal(await plugin.numberFolder('Book'), 3);
+	for (const path of ['Book/1-Alpha.md', 'Book/2-Research notes.md', 'Book/3-Skip.txt', 'Book/Skip.md', 'Book/Research/Child.md', 'Book/[Draft].md', 'Book/archive.tar.gz', 'Book-old/Private.md']) assert.ok(lookup(path));
+});
+
+test('numbering follows natural name order and replaces existing prefixes without leaving the folder', async () => {
+	const plugin = await pluginWithFiles({
+		'Book/10 - Third.md': 'Third', 'Book/2_Second.md': 'Second', 'Book/01 First.md': 'First',
+		'Book/Sub/Child.md': 'Child', 'Book-old/Private.md': 'Private'
+	});
+	plugin.settings.excludeCharacters = '';
+	const read = plugin.app.vault.read;
+	plugin.app.vault.read = () => { throw new Error('Numbering must not read file contents'); };
+	plugin.app.vault.getFiles = () => { throw new Error('Vault enumeration is forbidden'); };
+	const lookup = plugin.app.vault.getAbstractFileByPath;
+	plugin.app.vault.getAbstractFileByPath = path => {
+		assert.ok(path === 'Book' || path.startsWith('Book/'));
+		return lookup(path);
+	};
+	assert.equal(await plugin.numberFolder('Book'), 3);
+	assert.equal(await read(lookup('Book/1-First.md')), 'First');
+	assert.equal(await read(lookup('Book/2-Second.md')), 'Second');
+	assert.equal(await read(lookup('Book/3-Third.md')), 'Third');
+	assert.equal(await read(lookup('Book/Sub/Child.md')), 'Child');
+	assert.equal(await read(lookup('Book-old/Private.md')), 'Private');
+	assert.equal(await plugin.numberFolder('Book'), 0);
+});
+
+test('numbering preserves lower prefixes and excluded names and can use a custom or empty separator', async () => {
+	for (const separator of [' - ', '', ' chapter ']) {
+		const plugin = await pluginWithFiles({
+			'Book/01 Intro.md': 'Intro', 'Book/2 Context.md': 'Context',
+			'Book/9 Old.md': 'Old', 'Book/Next.md': 'Next', 'Book/Ignore.md': 'Ignore'
+		});
+		Object.assign(plugin.settings, { numberingStart: 3, numberingSeparator: separator, excludeNames: 'Ignore' });
+		assert.equal(await plugin.numberFolder('Book'), 2);
+		const lookup = plugin.app.vault.getAbstractFileByPath;
+		for (const path of ['Book/01 Intro.md', 'Book/2 Context.md', 'Book/Ignore.md']) assert.ok(lookup(path));
+		assert.ok(lookup('Book/3' + separator + 'Old.md'));
+		assert.ok(lookup('Book/4' + separator + 'Next.md'));
+		assert.equal(await plugin.numberFolder('Book'), 0);
+	}
+});
+
+test('numbering chooses prefix width automatically, including zero and digit boundaries', async () => {
+	for (const [count, start, width] of [[9, 1, 1], [10, 1, 2], [99, 1, 2], [100, 1, 3], [10, 0, 1], [100, 0, 2], [5, 97, 3]]) {
+		const plugin = await pluginWithFiles(Object.fromEntries(Array.from({ length: count }, (_, index) => ['Book/Chapter ' + (index + 1) + '.md', String(index)])));
+		plugin.settings.numberingStart = start;
+		assert.equal(await plugin.numberFolder('Book'), count);
+		for (let index = 0; index < count; index++) {
+			const file = plugin.app.vault.getAbstractFileByPath('Book/' + String(start + index).padStart(width, '0') + '-Chapter ' + (index + 1) + '.md');
+			assert.ok(file);
+			assert.equal(await plugin.app.vault.read(file), String(index));
+		}
+	}
+});
+
+test('numbering increment leaves gaps and derives padding from the last assigned number', async () => {
+	for (const [start, increment, prefixes] of [[1, 10, ['01', '11', '21']], [10, 10, ['10', '20', '30']], [0, 5, ['00', '05', '10']], [97, 2, ['097', '099', '101']]]) {
+		const plugin = await pluginWithFiles({ 'Book/Alpha.md': 'Alpha', 'Book/Beta.md': 'Beta', 'Book/Gamma.md': 'Gamma' });
+		Object.assign(plugin.settings, { numberingStart: start, numberingIncrement: increment });
+		assert.equal(await plugin.numberFolder('Book'), 3);
+		for (const [index, title] of ['Alpha', 'Beta', 'Gamma'].entries()) {
+			assert.ok(plugin.app.vault.getAbstractFileByPath('Book/' + prefixes[index] + '-' + title + '.md'));
+		}
+		assert.equal(await plugin.numberFolder('Book'), 0);
+	}
+});
+
+test('numbering increment is shared by files and folders while protected and excluded items consume no number', async () => {
+	const plugin = await pluginWithFiles({ 'Book/01-Intro.md': 'Intro', 'Book/Alpha.md': 'Alpha', 'Book/Beta/Child.md': 'Child', 'Book/Gamma.md': 'Gamma', 'Book/_Draft.md': 'Draft' });
+	Object.assign(plugin.settings, { numberingStart: 10, numberingIncrement: 10, numberFolders: true });
+	assert.equal(await plugin.numberFolder('Book'), 3);
+	for (const path of ['Book/01-Intro.md', 'Book/10-Alpha.md', 'Book/20-Beta/Child.md', 'Book/30-Gamma.md', 'Book/_Draft.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+	assert.equal(await plugin.numberFolder('Book', true), 3);
+	for (const path of ['Book/01-Intro.md', 'Book/Alpha.md', 'Book/Beta/Child.md', 'Book/Gamma.md', 'Book/_Draft.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+});
+
+test('numbering optionally renames direct subfolders while leaving their children named as before', async () => {
+	const plugin = await pluginWithFiles({ 'Book/02 Part/Child.md': 'Child', 'Book/Note.md': 'Note' });
+	plugin.settings.numberFolders = true;
+	assert.equal(await plugin.numberFolder('Book'), 2);
+	assert.ok(plugin.app.vault.getAbstractFileByPath('Book/1-Part/Child.md'));
+	assert.ok(plugin.app.vault.getAbstractFileByPath('Book/2-Note.md'));
+});
+
+test('numbering handles occupied source names without overwriting their contents', async () => {
+	const plugin = await pluginWithFiles({ 'Book/01 Alpha.md': 'First', 'Book/1-Alpha.md': 'Second' });
+	assert.equal(await plugin.numberFolder('Book'), 2);
+	assert.equal(await plugin.app.vault.read(plugin.app.vault.getAbstractFileByPath('Book/1-Alpha.md')), 'First');
+	assert.equal(await plugin.app.vault.read(plugin.app.vault.getAbstractFileByPath('Book/2-Alpha.md')), 'Second');
+});
+
+test('numbering rejects invalid settings and collisions with excluded files before renaming anything', async () => {
+	for (const settings of [
+		{ numberingStart: -1 }, { numberingStart: 1.5 }, { numberingStart: Number.MAX_SAFE_INTEGER },
+		{ numberingIncrement: 0 }, { numberingIncrement: -1 }, { numberingIncrement: 1.5 }, { numberingIncrement: Number.MAX_SAFE_INTEGER + 1 }, { numberingIncrement: Number.MAX_SAFE_INTEGER },
+		{ numberingSeparator: '../' }, { numberingSeparator: '\\' }, { numberingSeparator: '\n' }, { numberingSeparator: '2-' },
+		{ excludeNames: '1-alpha' }
+	]) {
+		const plugin = await pluginWithFiles({ 'Book/Alpha.md': 'Alpha', 'Book/Beta.md': 'Beta', 'Book/1-alpha.md': 'Existing' });
+		Object.assign(plugin.settings, settings);
+		let renamed = 0;
+		plugin.app.fileManager.renameFile = async () => { renamed++; };
+		await assert.rejects(() => plugin.numberFolder('Book'));
+		assert.equal(renamed, 0);
+	}
+});
+
+test('numbering rejects an empty separator if it would merge the prefix with a numeric title', async () => {
+	const plugin = await pluginWithFiles({ 'Book/1 - 2026 Diary.md': 'Diary' });
+	plugin.settings.numberingSeparator = '';
+	let renamed = 0;
+	plugin.app.fileManager.renameFile = async () => { renamed++; };
+	await assert.rejects(() => plugin.numberFolder('Book'), /separator is required/);
+	assert.equal(renamed, 0);
+});
+
+test('numbering restores original names if either renaming phase fails and releases its lock', async () => {
+	for (const [failAt, afterRename] of [[2, false], [4, false], [3, true]]) {
+		const plugin = await pluginWithFiles({ 'Book/Alpha.md': 'Alpha', 'Book/Beta.md': 'Beta' });
+		const rename = plugin.app.fileManager.renameFile;
+		let calls = 0;
+		plugin.app.fileManager.renameFile = async (...args) => {
+			calls++;
+			if (calls === failAt && !afterRename) throw new Error('Rename failed');
+			await rename(...args);
+			if (calls === failAt && afterRename) throw new Error('Rename failed');
+		};
+		await assert.rejects(() => plugin.numberFolder('Book'), /Rename failed/);
+		assert.equal(await plugin.app.vault.read(plugin.app.vault.getAbstractFileByPath('Book/Alpha.md')), 'Alpha');
+		assert.equal(await plugin.app.vault.read(plugin.app.vault.getAbstractFileByPath('Book/Beta.md')), 'Beta');
+		assert.equal(await plugin.numberFolder('Book'), 2);
+	}
+});
+
+test('numbering reports original paths if restoring names also fails, preserving every file', async () => {
+	const plugin = await pluginWithFiles({ 'Book/Alpha.md': 'Alpha', 'Book/Beta.md': 'Beta' });
+	const files = [...plugin.app.vault.getAbstractFileByPath('Book').children];
+	const rename = plugin.app.fileManager.renameFile;
+	let calls = 0;
+	plugin.app.fileManager.renameFile = async (...args) => {
+		if (++calls >= 2) throw new Error('Storage unavailable');
+		await rename(...args);
+	};
+	await assert.rejects(() => plugin.numberFolder('Book'), error => {
+		assert.match(error.message, /Original names could not be fully restored/);
+		assert.match(error.message, /-> Book\/Alpha\.md/);
+		return true;
+	});
+	assert.equal(await plugin.app.vault.read(files[0]), 'Alpha');
+	assert.equal(await plugin.app.vault.read(files[1]), 'Beta');
+	await assert.rejects(() => plugin.numberFolder('Missing'), /Folder not found/);
+});
+
+test('numbering stops if another operation moves an item outside the selected folder', async () => {
+	const plugin = await pluginWithFiles({ 'Book/Alpha.md': 'Alpha', 'Other/Private.md': 'Private' });
+	const lookup = plugin.app.vault.getAbstractFileByPath;
+	const folder = lookup('Book');
+	const other = lookup('Other');
+	const file = lookup('Book/Alpha.md');
+	const rename = plugin.app.fileManager.renameFile;
+	let calls = 0;
+	plugin.app.fileManager.renameFile = async (entry, path) => {
+		assert.equal(entry.parent, folder);
+		assert.ok(path.startsWith('Book/'));
+		calls++;
+		await rename(entry, path);
+		entry.parent.children.splice(entry.parent.children.indexOf(entry), 1);
+		entry.parent = other;
+		other.children.push(entry);
+		entry.path = 'Other/' + entry.name;
+	};
+	await assert.rejects(() => plugin.numberFolder('Book'), /Folder contents changed/);
+	assert.equal(calls, 1);
+	assert.equal(await plugin.app.vault.read(file), 'Alpha');
+});
+
+test('Folder numbering is offered on folders and the menu applies numbering', async () => {
+	const plugin = await pluginWithFiles({ 'Book/Alpha.md': 'Alpha' });
+	let onMenu;
+	plugin.app.workspace = { on: (name, callback) => { onMenu = callback; } };
+	plugin.addSettingTab = () => {};
+	plugin.registerEvent = () => {};
+	await plugin.onload();
+	const actions = new Map();
+	const menu = { addItem: callback => callback({ setTitle(title) { this.title = title; return this; }, onClick(callback) { actions.set(this.title, callback); } }) };
+	onMenu(menu, plugin.app.vault.getAbstractFileByPath('Book/Alpha.md'));
+	assert.equal(actions.size, 0);
+	onMenu(menu, plugin.app.vault.getAbstractFileByPath('Book'));
+	assert.deepEqual([...actions.keys()], ['Folder fusion', 'Folder numbering']);
+	notices.length = 0;
+	actions.get('Folder numbering')();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.ok(plugin.app.vault.getAbstractFileByPath('Book/1-Alpha.md'));
+	assert.match(notices[0], /1 item renamed/);
+	assert.equal(actions.has('Folder unnumbering'), false);
+	plugin.settings.debug = true;
+	onMenu(menu, plugin.app.vault.getAbstractFileByPath('Book'));
+	assert.equal(actions.has('Folder unnumbering'), true);
+	notices.length = 0;
+	actions.get('Folder unnumbering')();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.ok(plugin.app.vault.getAbstractFileByPath('Book/Alpha.md'));
+	assert.match(notices[0], /Unnumbering complete: 1 item renamed/);
+});
+
+test('debug unnumbering removes prefixes and custom separators while respecting scope and exclusions', async () => {
+	for (const numberFolders of [false, true]) {
+		const plugin = await pluginWithFiles({
+			'Book/01 chapter Alpha.md': 'Alpha', 'Book/02-Protected.md': 'Protected',
+			'Book/03_Draft.md': 'Draft', 'Book/04-Part/01-Child.md': 'Child',
+			'Book/05-Photo.png': 'Photo', 'Book/Unnumbered.md': 'Unnumbered', 'Other/01-Private.md': 'Private'
+		});
+		Object.assign(plugin.settings, { numberingStart: 1, numberingSeparator: ' chapter ', numberFolders, excludeNames: '02-Protected' });
+		assert.equal(await plugin.numberFolder('Book', true), numberFolders ? 3 : 2);
+		for (const path of ['Book/Alpha.md', 'Book/Photo.png', 'Book/02-Protected.md', 'Book/03_Draft.md', 'Book/Unnumbered.md', 'Other/01-Private.md', numberFolders ? 'Book/Part/01-Child.md' : 'Book/04-Part/01-Child.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+		assert.equal(await plugin.numberFolder('Book', true), 0);
+	}
+});
+
+test('unnumbering preserves prefixes below start for files and folders, including zero and padded numbers', async () => {
+	for (const start of [0, 3, Number.MAX_SAFE_INTEGER]) {
+		const plugin = await pluginWithFiles({
+			'Book/00-Zero.md': 'Zero', 'Book/02-Low.md': 'Low', 'Book/003-Boundary.md': 'Boundary',
+			'Book/02-Low folder/Child.md': 'Low child', 'Book/003-Boundary folder/Child.md': 'Boundary child',
+			'Book/9007199254740991-Limit.md': 'Limit'
+		});
+		Object.assign(plugin.settings, { numberingStart: start, numberFolders: true });
+		assert.equal(await plugin.numberFolder('Book', true), start === 0 ? 6 : start === 3 ? 3 : 1);
+		for (const [prefix, title] of [['00', 'Zero.md'], ['02', 'Low.md'], ['003', 'Boundary.md'], ['02', 'Low folder/Child.md'], ['003', 'Boundary folder/Child.md'], ['9007199254740991', 'Limit.md']]) {
+			assert.ok(plugin.app.vault.getAbstractFileByPath('Book/' + (Number(prefix) < start ? prefix + '-' : '') + title));
+		}
+	}
+});
+
+test('unnumbering rejects collisions and empty names before any rename', async () => {
+	for (const files of [{ 'Book/1-Alpha.md': 'Numbered', 'Book/Alpha.md': 'Existing' }, { 'Book/1-Alpha.md': 'First', 'Book/2-Alpha.md': 'Second' }, { 'Book/01.md': 'Numeric only' }]) {
+		const plugin = await pluginWithFiles(files);
+		let renames = 0;
+		plugin.app.fileManager.renameFile = async () => { renames++; };
+		await assert.rejects(() => plugin.numberFolder('Book', true), /Name already exists|empty name/);
+		assert.equal(renames, 0);
+		for (const path of Object.keys(files)) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+	}
+});
+
+test('unnumbering restores numbered names if either renaming phase fails', async () => {
+	for (const failAt of [2, 4]) {
+		const plugin = await pluginWithFiles({ 'Book/1-Alpha.md': 'Alpha', 'Book/2-Beta.md': 'Beta' });
+		const rename = plugin.app.fileManager.renameFile;
+		let calls = 0;
+		plugin.app.fileManager.renameFile = async (...args) => {
+			if (++calls === failAt) throw new Error('Rename failed');
+			await rename(...args);
+		};
+		await assert.rejects(() => plugin.numberFolder('Book', true), /Rename failed/);
+		for (const [path, content] of Object.entries({ 'Book/1-Alpha.md': 'Alpha', 'Book/2-Beta.md': 'Beta' })) assert.equal(await plugin.app.vault.read(plugin.app.vault.getAbstractFileByPath(path)), content);
+		assert.equal(await plugin.numberFolder('Book', true), 2);
+	}
+});
+
+test('numbering rejects overlapping runs', async () => {
+	const plugin = await pluginWithFiles({ 'Book/Alpha.md': 'Alpha' });
+	const rename = plugin.app.fileManager.renameFile;
+	let release;
+	plugin.app.fileManager.renameFile = async (...args) => {
+		await new Promise(resolve => { release = resolve; });
+		await rename(...args);
+	};
+	const first = plugin.numberFolder('Book');
+	await assert.rejects(() => plugin.numberFolder('Book'), /already running/);
+	plugin.app.fileManager.renameFile = rename;
+	release();
+	await first;
 });
 
 test('compiles nested files in path order, excluding snapshots and configured paths', async () => {

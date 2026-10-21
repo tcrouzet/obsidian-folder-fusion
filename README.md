@@ -43,7 +43,7 @@ To update, close Obsidian and replace the three plugin files with those from the
 ## Compile your project
 
 1. Arrange your chapters in a folder, using names such as `01-Opening.md` and `02-Chapter.md` to control their order.
-2. Adjust the options in **Settings → Folder Fusion**.
+2. Adjust the options in **Settings → Folder Fusion → Fusion**.
 3. Right-click the project folder in Obsidian's file explorer and choose **Folder fusion**.
 4. Open the generated `fusion-<folder>-YYYYMMDD-HHMM.md` note inside that folder.
 
@@ -51,24 +51,63 @@ The timestamp uses **UTC**. Compiling the same folder twice in the same minute r
 
 The result is a Markdown note. To produce formats such as DOCX or PDF, use your usual export workflow, for example a Pandoc plugin such as [Enhancing Export](https://github.com/mokeyish/obsidian-enhancing-export).
 
+## Number a folder
+
+Right-click a folder and choose **Folder numbering** to give its files a consistent numeric prefix. The command applies immediately, in natural name order (`2` before `10`). It works on direct children only: the selected folder itself and the contents of its subfolders are not numbered.
+
+Configure numbering in **Settings → Folder Fusion → Numbering**:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| **Numbering start** | `1` | First number to assign. Names already beginning with a smaller number remain unchanged. Zero is allowed. |
+| **Increment** | `1` | Step between consecutive numbers. Must be a positive whole number. Larger steps leave free numbers for inserting chapters. |
+| **Numbering separator** | `-` | Text between the number and the name, for example ` - `. It must not start with a digit. Empty is allowed unless it would merge the prefix with a numeric title. |
+| **Number folders** | Off | Includes direct subfolders in the same numbering sequence as files. Their children keep their names. |
+
+The shared **Exclude** filters apply to numbering; generated snapshots are also skipped. A leading number is replaced rather than added again. The configured separator and common existing separators (spaces, dots, underscores, colons and hyphens) are removed after the old number. File extensions are preserved. For example, with the default settings, `01 - Opening.md`, `2.Journey.md` and `10 Ending.md` become `1-Opening.md`, `2-Journey.md` and `3-Ending.md`.
+
+There is no prefix-length setting. Width depends only on the largest assigned number, including the configured start and increment: nine files starting at one use `1` through `9`; ten use `01` through `10`; a hundred use `001` through `100`. Ten files starting at `0` use `0` through `9`; a hundred starting at `0` use `00` through `99`. Five files starting at `97` use `097` through `101` to keep sorting consistent. Excluded items, folders with **Number folders** off, and existing prefixes below the start do not consume a number.
+
+### Leave room to insert chapters
+
+**Set Increment above 1 to insert new chapters between existing ones without renumbering the whole folder.** For example, with three chapters, set **Numbering start** to `10` and **Increment** to `10`: they receive `10`, `20`, `30`. You can then manually name an inserted chapter `15-New chapter.md` to place it between `10-Opening.md` and `20-Journey.md`. Fusion sorts by filename, so the inserted chapter appears between them. Running **Folder numbering** again reapplies the configured spacing to all eligible items.
+
+With the default **Increment** of `1`, numbering remains consecutive. With three chapters, **Numbering start** at `1` and **Increment** at `10`, the sequence is `01`, `11`, `21`; padding follows the largest assigned number. Excluded and protected items do not consume a step. Increment does not change which prefixes **Folder unnumbering** removes: all eligible prefixes at or above **Numbering start** are removed.
+
+Renames use Obsidian's `fileManager.renameFile()` API, so Obsidian handles link updates according to your vault settings. This can update references elsewhere in the vault; the plugin's numbering code lists and renames only children of the selected folder. It does not read file contents or enumerate the vault.
+
+The plugin checks naming collisions before starting, uses temporary names in the same folder when destinations overlap, and attempts to restore original names if a rename fails. If restoration also fails, the error lists the remaining names and their original paths. A second numbering operation is blocked while one is running.
+
+At the bottom of the settings tab, enable the **Debug** toggle to reveal **Folder unnumbering** in folder context menus. This preference is saved and remains active after restarting Obsidian. It removes leading numbers and their separators from direct children, preserves extensions, respects the shared exclusions and **Number folders** option, and leaves unnumbered names unchanged. Prefixes below **Numbering start** remain unchanged, just as with numbering; prefixes at or above it are removed. Naming collisions and names consisting only of numbers stop the operation before any rename. Turn **Debug** off to hide the command again.
+
+## Exclude files and folders
+
+Open **Settings → Folder Fusion → Exclude**. These filters apply to both **Fusion** and **Numbering**. Excluded folders and their contents are skipped.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| **Exclude characters** | `_` | Ignores any file or folder whose name contains any of the supplied characters, anywhere in the name. Characters are literal, including spaces. |
+| **Exclude files/folders** | `sortspec` | Comma-separated full names, matched case-insensitively. Files can be listed with or without their extension: `sortspec` excludes `sortspec.md`; `Notes.md` excludes that filename but keeps `Notes.txt`. Folder names match exactly. |
+
+For example, `_` skips `Draft_notes.md` and `Working_files`, while `sortspec, Research` skips those exact names, including `sortspec.md` and the contents of a folder named `Research`. It keeps `Research notes.md`. Clear both fields to disable the configurable exclusions; generated fusion snapshots remain excluded automatically.
+
+The default `sortspec` name protects the configuration notes used by [Custom Sort](https://community.obsidian.md/plugins/custom-sort).
+
 ## Choose what goes into the manuscript
 
-Open **Settings → Folder Fusion** to configure the manuscript. On Obsidian 1.13 or later, these options also appear in settings search. Earlier supported versions retain the same controls in the plugin's settings tab.
+Open **Settings → Folder Fusion → Fusion** to configure the manuscript. On Obsidian 1.13 or later, these options also appear in settings search. Earlier supported versions retain the same controls in the plugin's settings tab.
 
 | Setting | Default | Effect on the output |
 | --- | --- | --- |
-| **Exclude** | `sortspec\|_i` | Excludes files whose full paths match this case-insensitive regular expression. |
 | **Note separator** | Empty | Appends the supplied text after each file, following two line breaks, including after the last file. |
 | **No HTML comments** | On | Removes `<!-- comments -->`, including comments spanning several lines. |
 | **No Markdown comments and strikethrough** | On | Removes both `%%comments%%` and `~~crossed-out text~~`, including their contents. |
-
-For example, `sortspec|_i|Research|\.png$` excludes matching index notes, research paths and PNG files. Use a valid regular expression. To exclude nothing, use `(?!)`; an empty expression matches every path and produces an empty compilation.
 
 Comment removal affects the generated manuscript. Your original notes retain their comments and crossed-out text.
 
 ## Prepare literary formatting for export
 
-These options are **off by default**. Enable the styles you use in **Settings → Folder Fusion**.
+These options are **off by default**. Enable the styles you use in **Settings → Folder Fusion → Fusion**.
 
 | Setting | Write in your notes | Generated markup |
 | --- | --- | --- |
