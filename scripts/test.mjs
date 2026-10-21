@@ -9,11 +9,19 @@ import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
 import yaml from 'js-yaml';
+import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
 const { Linter } = require('eslint');
 const sourcePath = fileURLToPath(new URL('../plugin/main.ts', import.meta.url));
 const source = readFileSync(sourcePath, 'utf8');
+
+test('source typechecks with the declared browser libraries without ambient Node types', () => {
+	const config = ts.readConfigFile('tsconfig.json', ts.sys.readFile);
+	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, fileURLToPath(new URL('..', import.meta.url)));
+	const program = ts.createProgram(parsed.fileNames, { ...parsed.options, types: [], noEmit: true, skipLibCheck: true });
+	assert.deepEqual(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')), []);
+});
 
 test('source handles promises and avoids unsafe values under type-aware lint rules', () => {
 	const linter = new Linter();
@@ -41,6 +49,7 @@ function runWorkflowStep(name, fixture, tag) {
 
 const module = { exports: {} };
 const notices = [];
+const settingObservers = [];
 class Setting {
 	constructor(container) { this.row = {}; container.rows.push(this.row); }
 	setName(name) { this.row.name = name; return this; }
@@ -76,6 +85,11 @@ runInNewContext(transformSync(source + '\nexport { FolderFusionSettingTab };', {
 	module,
 	exports: module.exports,
 	crypto: globalThis.crypto,
+	MutationObserver: class {
+		constructor(callback) { this.callback = callback; settingObservers.push(this); }
+		observe(target, options) { this.target = target; this.options = options; }
+		disconnect() { this.disconnected = true; }
+	},
 	createFragment: callback => {
 		const fragment = { children: [], appendText(text) { this.children.push(text); }, createEl(tag, attributes) { this.children.push({ tag, ...attributes }); } };
 		callback(fragment);
@@ -83,7 +97,7 @@ runInNewContext(transformSync(source + '\nexport { FolderFusionSettingTab };', {
 	},
 	require: name => {
 		assert.equal(name, 'obsidian');
-		return { Plugin: class {}, PluginSettingTab: class {}, TFile, TFolder, Setting, Notice: class { constructor(message) { notices.push(message); } } };
+		return { Plugin: class { register() {} }, PluginSettingTab: class { constructor() { this.containerEl = {}; } }, TFile, TFolder, Setting, Notice: class { constructor(message) { notices.push(message); } } };
 	}
 });
 
@@ -175,7 +189,7 @@ test('settings are searchable and legacy controls still persist every existing o
 	const tab = new module.exports.FolderFusionSettingTab({}, plugin);
 	const groups = tab.getSettingDefinitions();
 	assert.deepEqual(Array.from(groups, group => [group.type, group.heading]), [['group', 'Fusion'], ['group', 'Numbering'], ['group', 'Exclude']]);
-	assert.deepEqual(Array.from(groups[1].items, definition => definition.control.key), ['numberingStart', 'numberingIncrement', 'numberingSeparator', 'numberFolders']);
+	assert.deepEqual(Array.from(groups[1].items, definition => definition.control.key), ['numberingStart', 'numberingIncrement', 'numberingSeparator', 'addFolderName', 'numberFolders']);
 	assert.deepEqual(Array.from(groups[2].items, definition => definition.control.key), ['excludeCharacters', 'excludeNames', 'debug']);
 	const definitions = Array.from(groups).flatMap(group => Array.from(group.items));
 	assert.deepEqual(Array.from(definitions, definition => definition.control.key).sort(), Object.keys(plugin.settings).sort());
@@ -212,6 +226,31 @@ test('settings are searchable and legacy controls still persist every existing o
 		assert.equal(plugin.settings[key], value);
 		assert.deepEqual(saved, { ...plugin.settings });
 	}
+});
+
+test('settings place controls before their text for wrapping and disconnect the observer on unload', async () => {
+	const plugin = await pluginWithFiles();
+	let cleanup;
+	plugin.register = callback => { cleanup = callback; };
+	const tab = new module.exports.FolderFusionSettingTab({}, plugin);
+	const observer = settingObservers.at(-1);
+	assert.equal(observer.target, tab.containerEl);
+	assert.deepEqual({ ...observer.options }, { childList: true, subtree: true });
+	const control = {};
+	let moves = 0;
+	const row = {
+		firstElementChild: {},
+		querySelector: selector => { assert.equal(selector, '.setting-item-control'); return control; },
+		prepend(element) { assert.equal(element, control); this.firstElementChild = element; moves++; }
+	};
+	tab.containerEl.querySelectorAll = selector => { assert.equal(selector, '.setting-item'); return [row]; };
+	observer.callback();
+	assert.equal(row.firstElementChild, control);
+	assert.equal(moves, 1);
+	observer.callback();
+	assert.equal(moves, 1);
+	cleanup();
+	assert.equal(observer.disconnected, true);
 });
 
 test('settings loading preserves valid saved values and defaults invalid values', async () => {
@@ -350,6 +389,43 @@ test('numbering increment is shared by files and folders while protected and exc
 	for (const path of ['Book/01-Intro.md', 'Book/10-Alpha.md', 'Book/20-Beta/Child.md', 'Book/30-Gamma.md', 'Book/_Draft.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
 	assert.equal(await plugin.numberFolder('Book', true), 3);
 	for (const path of ['Book/01-Intro.md', 'Book/Alpha.md', 'Book/Beta/Child.md', 'Book/Gamma.md', 'Book/_Draft.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+});
+
+test('Add folder name prefixes eligible files and folders once and preserves exclusions and extensions', async () => {
+	const plugin = await pluginWithFiles({
+		'Roman/00-Prologue.md': 'Prologue', 'Roman/01-Alpha.md': 'Alpha', 'Roman/02-Beta.md': 'Beta',
+		'Roman/Gamma.png': 'Image', 'Roman/Part/Child.md': 'Child', 'Roman/_Draft.md': 'Draft'
+	});
+	assert.equal(plugin.settings.addFolderName, false);
+	Object.assign(plugin.settings, { addFolderName: true, numberFolders: true });
+	assert.equal(await plugin.numberFolder('Roman'), 4);
+	for (const path of ['Roman/00-Prologue.md', 'Roman/1-Roman-Alpha.md', 'Roman/2-Roman-Beta.md', 'Roman/3-Roman-Gamma.png', 'Roman/4-Roman-Part/Child.md', 'Roman/_Draft.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+	assert.equal(await plugin.numberFolder('Roman'), 0);
+	assert.equal(await plugin.numberFolder('Roman', true), 4);
+	for (const path of ['Roman/00-Prologue.md', 'Roman/Alpha.md', 'Roman/Beta.md', 'Roman/Gamma.png', 'Roman/Part/Child.md', 'Roman/_Draft.md']) assert.ok(plugin.app.vault.getAbstractFileByPath(path));
+	assert.equal(await plugin.numberFolder('Roman'), 4);
+	assert.ok(plugin.app.vault.getAbstractFileByPath('Roman/1-Roman-Alpha.md'));
+});
+
+test('Add folder name uses the configured separator and stops adding when disabled', async () => {
+	for (const separator of [' - ', '']) {
+		const plugin = await pluginWithFiles({ 'Roman/Alpha.md': 'Alpha' });
+		Object.assign(plugin.settings, { addFolderName: true, numberingSeparator: separator });
+		assert.equal(await plugin.numberFolder('Roman'), 1);
+		assert.ok(plugin.app.vault.getAbstractFileByPath('Roman/1' + separator + 'Roman' + separator + 'Alpha.md'));
+		assert.equal(await plugin.numberFolder('Roman'), 0);
+		assert.equal(await plugin.numberFolder('Roman', true), 1);
+		assert.ok(plugin.app.vault.getAbstractFileByPath('Roman/Alpha.md'));
+		assert.equal(await plugin.numberFolder('Roman'), 1);
+		plugin.settings.addFolderName = false;
+		assert.equal(await plugin.numberFolder('Roman'), 0);
+		assert.equal(await plugin.numberFolder('Roman', true), 1);
+		assert.ok(plugin.app.vault.getAbstractFileByPath('Roman/Roman' + separator + 'Alpha.md'));
+	}
+	const plugin = await pluginWithFiles({ 'Alpha.md': 'Alpha' });
+	plugin.settings.addFolderName = true;
+	assert.equal(await plugin.numberFolder(''), 1);
+	assert.ok(plugin.app.vault.getAbstractFileByPath('1-Alpha.md'));
 });
 
 test('numbering optionally renames direct subfolders while leaving their children named as before', async () => {

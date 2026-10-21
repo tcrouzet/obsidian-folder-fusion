@@ -62,9 +62,12 @@ Configure numbering in **Settings → Folder Fusion → Numbering**:
 | **Numbering start** | `1` | First number to assign. Names already beginning with a smaller number remain unchanged. Zero is allowed. |
 | **Increment** | `1` | Step between consecutive numbers. Must be a positive whole number. Larger steps leave free numbers for inserting chapters. |
 | **Numbering separator** | `-` | Text between the number and the name, for example ` - `. It must not start with a digit. Empty is allowed unless it would merge the prefix with a numeric title. |
+| **Add folder name** | Off | Inserts the selected folder name between the number and the existing name, using the configured separator. When enabled, unnumbering also removes this folder prefix. |
 | **Number folders** | Off | Includes direct subfolders in the same numbering sequence as files. Their children keep their names. |
 
 The shared **Exclude** filters apply to numbering; generated snapshots are also skipped. A leading number is replaced rather than added again. The configured separator and common existing separators (spaces, dots, underscores, colons and hyphens) are removed after the old number. File extensions are preserved. For example, with the default settings, `01 - Opening.md`, `2.Journey.md` and `10 Ending.md` become `1-Opening.md`, `2-Journey.md` and `3-Ending.md`.
+
+**Add folder name** turns `Opening.md` inside `Roman` into `1-Roman-Opening.md` with the default settings, or `01-Roman-Opening.md` when the largest number requires two digits. Running numbering again does not repeat the folder prefix. With **Number folders** enabled, the same prefix is added to direct subfolder names. Turning the option off stops adding the prefix to new names and preserves existing names.
 
 There is no prefix-length setting. Width depends only on the largest assigned number, including the configured start and increment: nine files starting at one use `1` through `9`; ten use `01` through `10`; a hundred use `001` through `100`. Ten files starting at `0` use `0` through `9`; a hundred starting at `0` use `00` through `99`. Five files starting at `97` use `097` through `101` to keep sorting consistent. Excluded items, folders with **Number folders** off, and existing prefixes below the start do not consume a number.
 
@@ -78,7 +81,7 @@ Renames use Obsidian's `fileManager.renameFile()` API, so Obsidian handles link 
 
 The plugin checks naming collisions before starting, uses temporary names in the same folder when destinations overlap, and attempts to restore original names if a rename fails. If restoration also fails, the error lists the remaining names and their original paths. A second numbering operation is blocked while one is running.
 
-At the bottom of the settings tab, enable the **Debug** toggle to reveal **Folder unnumbering** in folder context menus. This preference is saved and remains active after restarting Obsidian. It removes leading numbers and their separators from direct children, preserves extensions, respects the shared exclusions and **Number folders** option, and leaves unnumbered names unchanged. Prefixes below **Numbering start** remain unchanged, just as with numbering; prefixes at or above it are removed. Naming collisions and names consisting only of numbers stop the operation before any rename. Turn **Debug** off to hide the command again.
+At the bottom of the settings tab, enable the **Debug** toggle to reveal **Folder unnumbering** in folder context menus. This preference is saved and remains active after restarting Obsidian. It removes leading numbers and their separators from direct children. With **Add folder name** enabled, it also removes the matching folder prefix: `01-Roman-Opening.md` becomes `Opening.md`. With the option off, only the numeric prefix is removed. It preserves extensions, respects the shared exclusions and **Number folders** option, and leaves unnumbered names unchanged. Prefixes below **Numbering start** remain unchanged, just as with numbering; prefixes at or above it are removed. Naming collisions and names consisting only of numbers stop the operation before any rename. Turn **Debug** off to hide the command again.
 
 ## Exclude files and folders
 

@@ -17,6 +17,7 @@ interface FolderFusionSettings {
 	numberingStart: number;
 	numberingIncrement: number;
 	numberingSeparator: string;
+	addFolderName: boolean;
 	numberFolders: boolean;
 	debug: boolean;
 }
@@ -35,6 +36,7 @@ const DEFAULT_SETTINGS: FolderFusionSettings = {
 	numberingStart: 1,
 	numberingIncrement: 1,
 	numberingSeparator: '-',
+	addFolderName: false,
 	numberFolders: false,
 	debug: false
 }
@@ -125,9 +127,16 @@ export default class FolderFusion extends Plugin {
 				if (separator && title.startsWith(separator)) title = title.slice(separator.length);
 				title = title.replace(/^[\s._:-]+/, '');
 			}
+			if (this.settings.addFolderName && folder.name) {
+				const folderPrefix = folder.name + separator;
+				if (title === folder.name) title = '';
+				else if (title.startsWith(folderPrefix)) title = title.slice(folderPrefix.length);
+				if (!removeNumbers) title = folder.name + (title ? separator + title : '');
+			}
 			if (removeNumbers && !title) throw new Error(`Removing the number would leave an empty name: ${file.path}`);
 			if (!removeNumbers && !separator && /^\d/.test(title)) throw new Error('A separator is required before a title starting with a number.');
-			const number = String(start + index * increment).padStart(width, '0');
+			const digits = String(start + index * increment);
+			const number = '0'.repeat(Math.max(0, width - digits.length)) + digits;
 			return {
 				file, original: file.path, current: file.path,
 				target: pathFor((removeNumbers ? title : number + (title ? separator + title : '')) + extension),
@@ -368,6 +377,15 @@ class FolderFusionSettingTab extends PluginSettingTab {
 	constructor(app: App, plugin: FolderFusion) {
 		super(app, plugin);
 		this.plugin = plugin;
+		// Floated controls must precede their text so descriptions can wrap underneath.
+		const observer = new MutationObserver(() => {
+			for (const row of Array.from(this.containerEl.querySelectorAll('.setting-item'))) {
+				const control = row.querySelector('.setting-item-control');
+				if (control && row.firstElementChild !== control) row.prepend(control);
+			}
+		});
+		observer.observe(this.containerEl, { childList: true, subtree: true });
+		plugin.register(() => observer.disconnect());
 	}
 
 	getSettingDefinitions(): {
@@ -443,6 +461,11 @@ class FolderFusionSettingTab extends PluginSettingTab {
 						name: 'Numbering separator',
 						desc: 'Text between the number and the name. A hyphen is used by default.',
 						control: { type: 'text', key: 'numberingSeparator' }
+					},
+					{
+						name: 'Add folder name',
+						desc: 'Insert the selected folder name between the number and the existing name. When enabled, unnumbering also removes this folder prefix.',
+						control: { type: 'toggle', key: 'addFolderName' }
 					},
 					{
 						name: 'Number folders',
