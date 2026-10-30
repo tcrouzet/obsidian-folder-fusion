@@ -50,6 +50,7 @@ function runWorkflowStep(name, fixture, tag) {
 const module = { exports: {} };
 const notices = [];
 const settingObservers = [];
+const registeredIcons = new Map();
 class Setting {
 	constructor(container) { this.row = {}; container.rows.push(this.row); }
 	setName(name) { this.row.name = name; return this; }
@@ -96,8 +97,9 @@ runInNewContext(transformSync(source + '\nexport { FolderFusionSettingTab };', {
 		return fragment;
 	},
 	require: name => {
+		if (name === '../icon.svg') return readFileSync(new URL('../icon.svg', import.meta.url), 'utf8');
 		assert.equal(name, 'obsidian');
-		return { Plugin: class { register() {} }, PluginSettingTab: class { constructor() { this.containerEl = {}; } }, TFile, TFolder, Setting, Notice: class { constructor(message) { notices.push(message); } } };
+		return { Plugin: class { register() {} }, PluginSettingTab: class { constructor() { this.containerEl = {}; } }, TFile, TFolder, Setting, Notice: class { constructor(message) { notices.push(message); } }, addIcon: (id, svg) => { registeredIcons.set(id, svg); } };
 	}
 });
 
@@ -170,7 +172,12 @@ test('folder menu reports export failures to the user', async () => {
 	let onMenu;
 	plugin.app.workspace = { on: (name, callback) => { assert.equal(name, 'file-menu'); onMenu = callback; } };
 	const tabs = [];
-	plugin.addSettingTab = tab => tabs.push(tab);
+	registeredIcons.clear();
+	plugin.addSettingTab = tab => {
+		assert.equal(tab.icon, 'folder-fusion');
+		assert.equal(registeredIcons.get(tab.icon), readFileSync(new URL('../icon.svg', import.meta.url), 'utf8'));
+		tabs.push(tab);
+	};
 	plugin.registerEvent = () => {};
 	await plugin.onload();
 	assert.equal(tabs.length, 1);

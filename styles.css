@@ -1,3 +1,7 @@
+.vertical-tab-nav-item[data-setting-id="folder-fusion"] .vertical-tab-nav-item-icon {
+	display: flex;
+}
+
 .folder-fusion-settings .setting-item {
 	display: block;
 }

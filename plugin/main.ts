@@ -1,5 +1,6 @@
-import { App, TFile, TFolder, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, TFile, TFolder, Plugin, PluginSettingTab, Setting, Notice, addIcon } from 'obsidian';
 import type { SettingDefinitionControl, TAbstractFile } from 'obsidian';
+import folderFusionIcon from '../icon.svg';
 
 // Remember to rename these classes and interfaces!
 
@@ -48,6 +49,7 @@ export default class FolderFusion extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
+		addIcon('folder-fusion', folderFusionIcon);
 		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new FolderFusionSettingTab(this.app, this));
 
@@ -372,6 +374,7 @@ export default class FolderFusion extends Plugin {
 }
 
 class FolderFusionSettingTab extends PluginSettingTab {
+	override icon = 'folder-fusion';
 	plugin: FolderFusion;
 
 	constructor(app: App, plugin: FolderFusion) {
