@@ -1,4 +1,4 @@
-import { App, TFile, TFolder, Plugin, PluginSettingTab, Setting, Notice, addIcon } from 'obsidian';
+import { App, TFile, TFolder, Plugin, PluginSettingTab, Notice, addIcon } from 'obsidian';
 import type { SettingDefinitionControl, TAbstractFile } from 'obsidian';
 import folderFusionIcon from '../icon.svg';
 
@@ -505,45 +505,4 @@ class FolderFusionSettingTab extends PluginSettingTab {
 		];
 	}
 
-	display(): void {
-		this.containerEl.empty();
-		this.containerEl.addClass('folder-fusion-settings');
-		for (const group of this.getSettingDefinitions()) {
-			new Setting(this.containerEl).setName(group.heading).setHeading();
-			for (const definition of group.items) {
-				const setting = new Setting(this.containerEl).setName(definition.name).setDesc(definition.desc ?? '');
-				const { control } = definition;
-				const key = control.key;
-				if (key === 'numberingStart' || key === 'numberingIncrement') {
-					const minimum = key === 'numberingIncrement' ? 1 : 0;
-					setting.addText(text => {
-						text.inputEl.type = 'number';
-						text.inputEl.min = String(minimum);
-						text.inputEl.step = '1';
-						text.setValue(String(this.plugin.settings[key])).onChange(async value => {
-							const number = Number(value);
-							if (!value.trim() || !Number.isSafeInteger(number) || number < minimum) return;
-							this.plugin.settings[key] = number;
-							await this.plugin.saveSettings();
-						});
-					});
-				} else if (key === 'excludeCharacters' || key === 'excludeNames' || key === 'noteSeparator' || key === 'numberingSeparator') {
-					setting.addText(text => text
-						.setPlaceholder(control.type === 'text' ? control.placeholder ?? '' : '')
-						.setValue(this.plugin.settings[key])
-						.onChange(async value => {
-							this.plugin.settings[key] = value;
-							await this.plugin.saveSettings();
-						}));
-				} else {
-					setting.addToggle(toggle => toggle
-						.setValue(this.plugin.settings[key])
-						.onChange(async value => {
-							this.plugin.settings[key] = value;
-							await this.plugin.saveSettings();
-						}));
-				}
-			}
-		}
-	}
 }

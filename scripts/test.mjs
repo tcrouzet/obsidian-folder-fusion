@@ -51,25 +51,6 @@ const module = { exports: {} };
 const notices = [];
 const settingObservers = [];
 const registeredIcons = new Map();
-class Setting {
-	constructor(container) { this.row = {}; container.rows.push(this.row); }
-	setName(name) { this.row.name = name; return this; }
-	setDesc(desc) { this.row.desc = desc; return this; }
-	setHeading() { this.row.heading = true; return this; }
-	addControl(type, callback) {
-		const row = this.row;
-		row.type = type;
-		callback({
-			inputEl: row.inputEl = {},
-			setValue(value) { row.value = value; return this; },
-			setPlaceholder(value) { row.placeholder = value; return this; },
-			onChange(change) { row.change = change; return this; }
-		});
-		return this;
-	}
-	addToggle(callback) { return this.addControl('toggle', callback); }
-	addText(callback) { return this.addControl('text', callback); }
-}
 class TFile {
 	constructor(path) { this.path = path; }
 	get name() { return this.path.split('/').pop(); }
@@ -99,7 +80,7 @@ runInNewContext(transformSync(source + '\nexport { FolderFusionSettingTab };', {
 	require: name => {
 		if (name === '../icon.svg') return readFileSync(new URL('../icon.svg', import.meta.url), 'utf8');
 		assert.equal(name, 'obsidian');
-		return { Plugin: class { register() {} }, PluginSettingTab: class { constructor() { this.containerEl = {}; } }, TFile, TFolder, Setting, Notice: class { constructor(message) { notices.push(message); } }, addIcon: (id, svg) => { registeredIcons.set(id, svg); } };
+		return { Plugin: class { register() {} }, PluginSettingTab: class { constructor() { this.containerEl = {}; } }, TFile, TFolder, Notice: class { constructor(message) { notices.push(message); } }, addIcon: (id, svg) => { registeredIcons.set(id, svg); } };
 	}
 });
 
@@ -191,48 +172,27 @@ test('folder menu reports export failures to the user', async () => {
 	assert.match(notices[0], /Cannot read chapter/);
 });
 
-test('settings are searchable and legacy controls still persist every existing option', async () => {
+test('settings use the declarative API and expose every saved option to search', async () => {
 	const plugin = await pluginWithFiles();
 	const tab = new module.exports.FolderFusionSettingTab({}, plugin);
+	assert.equal(Object.hasOwn(module.exports.FolderFusionSettingTab.prototype, 'display'), false);
 	const groups = tab.getSettingDefinitions();
 	assert.deepEqual(Array.from(groups, group => [group.type, group.heading]), [['group', 'Fusion'], ['group', 'Numbering'], ['group', 'Exclude']]);
 	assert.deepEqual(Array.from(groups[1].items, definition => definition.control.key), ['numberingStart', 'numberingIncrement', 'numberingSeparator', 'addFolderName', 'numberFolders']);
 	assert.deepEqual(Array.from(groups[2].items, definition => definition.control.key), ['excludeCharacters', 'excludeNames', 'debug']);
 	const definitions = Array.from(groups).flatMap(group => Array.from(group.items));
 	assert.deepEqual(Array.from(definitions, definition => definition.control.key).sort(), Object.keys(plugin.settings).sort());
-	const rows = [];
-	tab.containerEl = { rows, empty: () => { rows.length = 0; }, addClass: () => {}, createEl: () => { throw new Error('Unexpected HTML heading'); } };
-	let saved;
-	plugin.saveData = async value => { saved = { ...value }; };
-	tab.display();
-	assert.deepEqual(rows.map(row => row.name), Array.from(groups).flatMap(group => [group.heading, ...Array.from(group.items, definition => definition.name)]));
-	assert.deepEqual(rows.filter(row => row.heading).map(row => row.name), ['Fusion', 'Numbering', 'Exclude']);
-	const controls = rows.filter(row => !row.heading);
-	const debug = rows.at(-1);
+	const debug = definitions.at(-1);
 	assert.equal(debug.name, 'Debug');
-	assert.equal(debug.type, 'toggle');
-	assert.equal(debug.value, false);
-	await debug.change(true);
-	assert.equal(saved.debug, true);
-	plugin.loadData = async () => saved;
-	await plugin.loadSettings();
-	assert.equal(plugin.settings.debug, true);
-	await debug.change(false);
+	assert.equal(debug.control.type, 'toggle');
 	assert.equal(plugin.settings.debug, false);
-	const link = controls.find(row => row.name === 'Exclude files/folders').desc.children.at(-1);
+	const link = definitions.find(definition => definition.control.key === 'excludeNames').desc.children.at(-1);
 	assert.deepEqual({ ...link }, { tag: 'a', text: 'Custom Sort', href: 'https://community.obsidian.md/plugins/custom-sort' });
-	assert.equal(controls.length, definitions.length);
-	for (const [index, definition] of definitions.entries()) {
-		const row = controls[index];
-		const key = definition.control.key;
-		assert.equal(row.name, definition.name);
-		assert.equal(row.inputEl.type ?? row.type, definition.control.type);
-		assert.equal(row.value, definition.control.type === 'number' ? String(plugin.settings[key]) : plugin.settings[key]);
-		const value = definition.control.type === 'number' ? 7 : typeof row.value === 'boolean' ? !row.value : 'test';
-		await row.change(definition.control.type === 'number' ? String(value) : value);
-		assert.equal(plugin.settings[key], value);
-		assert.deepEqual(saved, { ...plugin.settings });
+	for (const definition of definitions) {
+		const value = plugin.settings[definition.control.key];
+		assert.equal(typeof value, definition.control.type === 'toggle' ? 'boolean' : definition.control.type === 'number' ? 'number' : 'string');
 	}
+
 });
 
 test('settings place controls before their text for wrapping and disconnect the observer on unload', async () => {

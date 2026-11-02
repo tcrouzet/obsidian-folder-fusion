@@ -29,7 +29,7 @@ Folder Fusion looks up the selected folder and walks its children and subfolders
 
 ## Install Folder Fusion
 
-Requires **Obsidian 1.5.0 or later**. The manifest allows desktop and mobile use; the manual installation steps below describe desktop installation.
+Requires **Obsidian 1.14.0 or later**. The manifest allows desktop and mobile use; the manual installation steps below describe desktop installation.
 
 1. Open the [latest GitHub release](https://github.com/tcrouzet/obsidian-folder-fusion/releases/latest).
 2. Download `main.js`, `manifest.json` and `styles.css` from the release assets.
@@ -98,7 +98,7 @@ The default `sortspec` name protects the configuration notes used by [Custom Sor
 
 ## Choose what goes into the manuscript
 
-Open **Settings → Folder Fusion → Fusion** to configure the manuscript. On Obsidian 1.13 or later, these options also appear in settings search. Earlier supported versions retain the same controls in the plugin's settings tab.
+Open **Settings → Folder Fusion → Fusion** to configure the manuscript. These options also appear in settings search.
 
 | Setting | Default | Effect on the output |
 | --- | --- | --- |
