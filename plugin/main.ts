@@ -244,18 +244,20 @@ export default class FolderFusion extends Plugin {
 			visited.add(entry);
 			if (entry instanceof TFolder) {
 				pending.push(...entry.children);
-			} else if (entry instanceof TFile) {
+			} else if (entry instanceof TFile && entry.extension.toLowerCase() === 'md') {
 				files.push(entry);
 			}
 		}
 
 		const sortedFiles = files.sort((a, b) => a.path.localeCompare(b.path));
+		const bookbinderInstalled = await this.app.vault.adapter.exists(`${this.app.vault.configDir}/plugins/bookbinder/manifest.json`);
 
 		let concatenatedContent = '';
 	
 		for (const file of sortedFiles) {
 
 			let fileContent = await this.app.vault.read(file);
+			if (bookbinderInstalled && /obsidian:\/\/bookbinder(?=[/?#\s)"'<>\]]|$)/i.test(fileContent)) continue;
 
 			if(this.settings.nocomments){
 				fileContent = fileContent.replace(/<!--[\s\S]*?-->/g, '');

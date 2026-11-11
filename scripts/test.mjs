@@ -110,6 +110,8 @@ async function pluginWithFiles(contents = {}) {
 		file.parent.children.push(file);
 	}
 	plugin.app = { vault: {
+		configDir: '.obsidian',
+		adapter: { exists: async () => false },
 		getAbstractFileByPath: path => entries.get(path) ?? null,
 		read: async file => fileContents.get(file)
 	}, fileManager: {
@@ -132,7 +134,7 @@ async function pluginWithFiles(contents = {}) {
 test('export waits for snapshot writing and propagates read and write failures', async () => {
 	const plugin = await pluginWithFiles({ 'Book/Chapter.md': 'Text' });
 	let finishWrite;
-	plugin.app.vault.adapter = { write: () => new Promise(resolve => { finishWrite = resolve; }) };
+	plugin.app.vault.adapter = { ...plugin.app.vault.adapter, write: () => new Promise(resolve => { finishWrite = resolve; }) };
 	let finished = false;
 	const exported = plugin.exportFolder('Book').then(() => { finished = true; });
 	await new Promise(resolve => setImmediate(resolve));
@@ -181,7 +183,7 @@ test('selection fusion reads only selected files, in path order, without visitin
 	const read = plugin.app.vault.read;
 	plugin.app.vault.read = async file => { reads.push(file.path); return read(file); };
 	let written;
-	plugin.app.vault.adapter = { write: async (path, content) => { written = { path, content }; } };
+	plugin.app.vault.adapter = { ...plugin.app.vault.adapter, write: async (path, content) => { written = { path, content }; } };
 	await plugin.exportSelection([lookup('Book/Part/03.md'), lookup('Book/01.md'), lookup('Book/01.md')]);
 	assert.deepEqual(reads, ['Book/01.md', 'Book/Part/03.md']);
 	assert.equal(written.content, 'First\n\nThird\n\n');
@@ -196,7 +198,7 @@ test('selection fusion includes only selected folder trees, deduplicates overlap
 	});
 	const lookup = plugin.app.vault.getAbstractFileByPath;
 	let content;
-	plugin.app.vault.adapter = { write: async (_path, value) => { content = value; } };
+	plugin.app.vault.adapter = { ...plugin.app.vault.adapter, write: async (_path, value) => { content = value; } };
 	await plugin.exportSelection(['Book/02-Part', 'Book/02-Part/01.md', 'Book/03.md', 'Book/_Draft/Child.md', 'Book/sortspec.md', 'Book/fusion-Book-20251001-1200.md'].map(lookup));
 	assert.equal(content, 'First\n\nThird\n\n');
 });
@@ -204,7 +206,7 @@ test('selection fusion includes only selected folder trees, deduplicates overlap
 test('selection fusion writes at the vault root for unrelated parents and ignores an empty selection', async () => {
 	const plugin = await pluginWithFiles({ 'A/First.md': 'First', 'B/Second.md': 'Second' });
 	const writes = [];
-	plugin.app.vault.adapter = { write: async (path, content) => { writes.push({ path, content }); } };
+	plugin.app.vault.adapter = { ...plugin.app.vault.adapter, write: async (path, content) => { writes.push({ path, content }); } };
 	await plugin.exportSelection([]);
 	assert.equal(writes.length, 0);
 	await plugin.exportSelection(['B/Second.md', 'A/First.md'].map(plugin.app.vault.getAbstractFileByPath));
@@ -229,7 +231,7 @@ test('explorer selection and single-file menus offer fusion and report selection
 	events.get('files-menu')(menu, selection);
 	assert.deepEqual([...actions.keys()], ['Folder fusion']);
 	let content;
-	plugin.app.vault.adapter = { write: async (_path, value) => { content = value; } };
+	plugin.app.vault.adapter = { ...plugin.app.vault.adapter, write: async (_path, value) => { content = value; } };
 	actions.get('Folder fusion')();
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(content, 'First\n\nThird\n\n');
@@ -245,6 +247,52 @@ test('explorer selection and single-file menus offer fusion and report selection
 	actions.get('Folder fusion')();
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(content, 'Third\n\n');
+});
+
+test('folder and selection fusion read only Markdown files, including uppercase extensions', async () => {
+	const contents = {
+		'Book/01.md': 'First', 'Book/02.MD': 'Second', 'Book/03.txt': 'Text', 'Book/04.pdf': 'PDF',
+		'Book/05.png': 'Image', 'Book/06.canvas': 'Canvas', 'Book/07.md.txt': 'Not Markdown', 'Book/08': 'No extension'
+	};
+	const plugin = await pluginWithFiles(contents);
+	const read = plugin.app.vault.read;
+	const reads = [];
+	plugin.app.vault.read = async file => {
+		assert.equal(file.extension.toLowerCase(), 'md', 'Non-Markdown contents must never be read');
+		reads.push(file.path);
+		return read(file);
+	};
+	for (const selection of [undefined, Object.keys(contents).map(plugin.app.vault.getAbstractFileByPath)]) {
+		reads.length = 0;
+		assert.equal(await plugin.concatenateFiles('Book', selection), 'First\n\nSecond\n\n');
+		assert.deepEqual(reads, ['Book/01.md', 'Book/02.MD']);
+	}
+});
+
+test('fusion excludes Bookbinder links only when Bookbinder is installed, using the vault configuration directory', async () => {
+	const contents = {
+		'Book/01.md': 'Chapter',
+		'Book/02.md': '[Open](obsidian://bookbinder?vault=Test&file=Book)',
+		'Book/03.md': '<a href="obsidian://bookbinder/">Open</a>',
+		'Book/04.MD': '[Open](OBSIDIAN://BOOKBINDER#project)',
+		'Book/05.md': 'obsidian://bookbinder',
+		'Book/06.md': 'Hidden<!-- obsidian://bookbinder?file=Book -->',
+		'Book/07.md': '[Different action](obsidian://bookbinder-extra)',
+		'Book/08.md': 'Bookbinder is mentioned here.'
+	};
+	for (const installed of [true, false]) {
+		const plugin = await pluginWithFiles(contents);
+		plugin.app.vault.configDir = 'custom-config';
+		const checked = [];
+		plugin.app.vault.adapter.exists = async path => { checked.push(path); return installed; };
+		const expected = installed
+			? 'Chapter\n\n[Different action](obsidian://bookbinder-extra)\n\nBookbinder is mentioned here.\n\n'
+			: Object.values(contents).map(content => content.replace(/<!--[\s\S]*?-->/g, '') + '\n\n').join('');
+		for (const selection of [undefined, Object.keys(contents).map(plugin.app.vault.getAbstractFileByPath)]) {
+			assert.equal(await plugin.concatenateFiles('Book', selection), expected);
+		}
+		assert.deepEqual(checked, ['custom-config/plugins/bookbinder/manifest.json', 'custom-config/plugins/bookbinder/manifest.json']);
+	}
 });
 
 test('settings use the declarative API and expose every saved option to search', async () => {
@@ -355,7 +403,7 @@ test('shared name exclusions match whole names with optional extensions and prun
 	plugin.settings.excludeNames = ' skip.md, RESEARCH, [Draft], archive.tar.gz, ';
 	const lookup = plugin.app.vault.getAbstractFileByPath;
 	Object.defineProperty(lookup('Book/Research'), 'children', { get() { throw new Error('Excluded folders must not be traversed'); } });
-	assert.equal(await plugin.concatenateFiles('Book'), 'Alpha\n\nResearch notes\n\nText\n\n');
+	assert.equal(await plugin.concatenateFiles('Book'), 'Alpha\n\nResearch notes\n\n');
 	assert.equal(await plugin.numberFolder('Book'), 3);
 	for (const path of ['Book/1-Alpha.md', 'Book/2-Research notes.md', 'Book/3-Skip.txt', 'Book/Skip.md', 'Book/Research/Child.md', 'Book/[Draft].md', 'Book/archive.tar.gz', 'Book-old/Private.md']) assert.ok(lookup(path));
 });
@@ -759,7 +807,7 @@ test('renumbers numeric footnotes across chapters and gathers definitions at the
 test('writes a snapshot inside the selected folder using its name and a UTC timestamp', async () => {
 	const plugin = await pluginWithFiles();
 	const writes = [];
-	plugin.app.vault.adapter = { write: async (...args) => writes.push(args) };
+	plugin.app.vault.adapter = { ...plugin.app.vault.adapter, write: async (...args) => writes.push(args) };
 	await plugin.savingFiles('Draft/Book', 'Manuscript');
 	assert.equal(writes.length, 1);
 	assert.match(writes[0][0], /^Draft\/Book\/fusion-Book-\d{8}-\d{4}\.md$/);

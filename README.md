@@ -19,7 +19,7 @@ My novel/
     fusion-My novel-20261020-1430.md
 ```
 
-Folder Fusion looks up the selected folder and walks its children and subfolders, without enumerating all files in the vault. It sorts those files by their full paths and combines their contents. Numeric prefixes help put chapters and sections in the intended order. The generated note sits directly inside the selected folder; source notes stay in place.
+Folder Fusion looks up the selected folder and walks its children and subfolders, without enumerating all files in the vault. It sorts Markdown files by their full paths and combines their contents. Numeric prefixes help put chapters and sections in the intended order. The generated note sits directly inside the selected folder; source notes stay in place.
 
 - **Read a complete draft** without switching between chapters.
 - **Keep dated snapshots** of your work. Generated fusion files are excluded from later compilations.
@@ -98,9 +98,11 @@ Open **Settings → Folder Fusion → Exclude**. These filters apply to both **F
 | Setting | Default | Effect |
 | --- | --- | --- |
 | **Exclude characters** | `_` | Ignores any file or folder whose name contains any of the supplied characters, anywhere in the name. Characters are literal, including spaces. |
-| **Exclude files/folders** | `sortspec` | Comma-separated full names, matched case-insensitively. Files can be listed with or without their extension: `sortspec` excludes `sortspec.md`; `Notes.md` excludes that filename but keeps `Notes.txt`. Folder names match exactly. |
+| **Exclude files/folders** | `sortspec` | Comma-separated full names, matched case-insensitively. Files can be listed with or without their extension: `sortspec` excludes `sortspec.md`; `Notes.md` matches that exact filename. Folder names match exactly. |
 
 For example, `_` skips `Draft_notes.md` and `Working_files`, while `sortspec, Research` skips those exact names, including `sortspec.md` and the contents of a folder named `Research`. It keeps `Research notes.md`. Clear both fields to disable the configurable exclusions; generated fusion snapshots remain excluded automatically.
+
+Fusion only reads Markdown (`.md`) files; all other file types are ignored automatically. If Bookbinder is installed, even when disabled, Markdown notes containing an `obsidian://bookbinder` link are also excluded from both folder and selection fusion.
 
 The default `sortspec` name protects the configuration notes used by [Custom Sort](https://community.obsidian.md/plugins/custom-sort).
 
@@ -136,7 +138,7 @@ Folder Fusion renumbers numeric calls such as `[^1]` in their order of appearanc
 
 Before compiling a large project, check these limits:
 
-- **Use a folder containing text files.** The current scanner reads every matching file, including attachments; it does not filter by `.md`. Exclude non-text files or keep attachments outside the project folder.
+- **Markdown input only.** Attachments, plain text files, PDFs and all other non-Markdown formats are ignored automatically.
 - **Review complex footnotes.** Named footnotes, multiline definitions and repeated references to the same note are not handled as a complete Markdown footnote system.
 - **Check embedded content after export.** The plugin concatenates file contents; it does not resolve embeds or rewrite relative links and attachment paths.
 
