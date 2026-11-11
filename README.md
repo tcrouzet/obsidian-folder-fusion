@@ -51,6 +51,14 @@ The timestamp uses **UTC**. Compiling the same folder twice in the same minute r
 
 The result is a Markdown note. To produce formats such as DOCX or PDF, use your usual export workflow, for example a Pandoc plugin such as [Enhancing Export](https://github.com/mokeyish/obsidian-enhancing-export).
 
+## Compile a selection
+
+In [Obsidian's file explorer](https://obsidian.md/help/plugins/file-explorer), select the notes you want to combine: use **Option-click** on macOS or **Alt-click** on Windows/Linux to select individual items, or **Shift-click** for a range. Right-click the selection and choose **Folder fusion**. A single file also has this command in its context menu.
+
+Only the selected files and explicitly selected folder trees are compiled. Unselected siblings are left out, and overlapping selections include each file once. The same exclusions, formatting, footnotes and sorting by full path apply as for folder fusion.
+
+The result is `fusion-selection-YYYYMMDD-HHMM.md`, saved in the selected items' nearest common parent folder, or at the vault root when needed. The timestamp uses UTC. Exporting another selection to that folder within the same minute replaces that selection snapshot.
+
 ## Number a folder
 
 Right-click a folder and choose **Folder numbering** to give its files a consistent numeric prefix. The command applies immediately, in natural name order (`2` before `10`). It works on direct children only: the selected folder itself and the contents of its subfolders are not numbered.

@@ -151,7 +151,7 @@ test('export waits for snapshot writing and propagates read and write failures',
 test('folder menu reports export failures to the user', async () => {
 	const plugin = await pluginWithFiles({ 'Book/Chapter.md': 'Text' });
 	let onMenu;
-	plugin.app.workspace = { on: (name, callback) => { assert.equal(name, 'file-menu'); onMenu = callback; } };
+	plugin.app.workspace = { on: (name, callback) => { if (name === 'file-menu') onMenu = callback; else assert.equal(name, 'files-menu'); } };
 	const tabs = [];
 	registeredIcons.clear();
 	plugin.addSettingTab = tab => {
@@ -170,6 +170,81 @@ test('folder menu reports export failures to the user', async () => {
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(notices.length, 1);
 	assert.match(notices[0], /Cannot read chapter/);
+});
+
+test('selection fusion reads only selected files, in path order, without visiting their unselected siblings', async () => {
+	const plugin = await pluginWithFiles({ 'Book/01.md': '<!-- hidden -->First', 'Book/Part/03.md': 'Third', 'Book/02.md': 'Unselected', 'Other/Private.md': 'Private' });
+	const lookup = plugin.app.vault.getAbstractFileByPath;
+	Object.defineProperty(lookup('Book'), 'children', { get() { throw new Error('Selection must not enumerate the containing folder'); } });
+	plugin.app.vault.getFiles = () => { throw new Error('Vault enumeration is forbidden'); };
+	const reads = [];
+	const read = plugin.app.vault.read;
+	plugin.app.vault.read = async file => { reads.push(file.path); return read(file); };
+	let written;
+	plugin.app.vault.adapter = { write: async (path, content) => { written = { path, content }; } };
+	await plugin.exportSelection([lookup('Book/Part/03.md'), lookup('Book/01.md'), lookup('Book/01.md')]);
+	assert.deepEqual(reads, ['Book/01.md', 'Book/Part/03.md']);
+	assert.equal(written.content, 'First\n\nThird\n\n');
+	assert.match(written.path, /^Book\/fusion-selection-\d{8}-\d{4}\.md$/);
+});
+
+test('selection fusion includes only selected folder trees, deduplicates overlaps and applies ancestor exclusions', async () => {
+	const plugin = await pluginWithFiles({
+		'Book/02-Part/01.md': 'First', 'Book/02-Part/_Notes/Private.md': 'Excluded', 'Book/03.md': 'Third',
+		'Book/_Draft/Child.md': 'Excluded child', 'Book/sortspec.md': 'Sortspec',
+		'Book/fusion-Book-20251001-1200.md': 'Snapshot', 'Book/04.md': 'Unselected'
+	});
+	const lookup = plugin.app.vault.getAbstractFileByPath;
+	let content;
+	plugin.app.vault.adapter = { write: async (_path, value) => { content = value; } };
+	await plugin.exportSelection(['Book/02-Part', 'Book/02-Part/01.md', 'Book/03.md', 'Book/_Draft/Child.md', 'Book/sortspec.md', 'Book/fusion-Book-20251001-1200.md'].map(lookup));
+	assert.equal(content, 'First\n\nThird\n\n');
+});
+
+test('selection fusion writes at the vault root for unrelated parents and ignores an empty selection', async () => {
+	const plugin = await pluginWithFiles({ 'A/First.md': 'First', 'B/Second.md': 'Second' });
+	const writes = [];
+	plugin.app.vault.adapter = { write: async (path, content) => { writes.push({ path, content }); } };
+	await plugin.exportSelection([]);
+	assert.equal(writes.length, 0);
+	await plugin.exportSelection(['B/Second.md', 'A/First.md'].map(plugin.app.vault.getAbstractFileByPath));
+	assert.equal(writes.length, 1);
+	assert.match(writes[0].path, /^fusion-selection-\d{8}-\d{4}\.md$/);
+	assert.equal(writes[0].content, 'First\n\nSecond\n\n');
+});
+
+test('explorer selection and single-file menus offer fusion and report selection export failures', async () => {
+	const plugin = await pluginWithFiles({ 'Book/01.md': 'First', 'Book/02.md': 'Unselected', 'Book/03.md': 'Third' });
+	const events = new Map();
+	plugin.app.workspace = { on: (name, callback) => { events.set(name, callback); } };
+	plugin.addSettingTab = () => {};
+	plugin.registerEvent = () => {};
+	await plugin.onload();
+	assert.equal(typeof events.get('files-menu'), 'function');
+	const actions = new Map();
+	const menu = { addItem: callback => callback({ setTitle(title) { this.title = title; return this; }, onClick(callback) { actions.set(this.title, callback); } }) };
+	events.get('files-menu')(menu, []);
+	assert.equal(actions.size, 0);
+	const selection = ['Book/03.md', 'Book/01.md'].map(plugin.app.vault.getAbstractFileByPath);
+	events.get('files-menu')(menu, selection);
+	assert.deepEqual([...actions.keys()], ['Folder fusion']);
+	let content;
+	plugin.app.vault.adapter = { write: async (_path, value) => { content = value; } };
+	actions.get('Folder fusion')();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(content, 'First\n\nThird\n\n');
+	plugin.app.vault.adapter.write = async () => { throw new Error('Selection write failed'); };
+	notices.length = 0;
+	actions.get('Folder fusion')();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.match(notices[0], /Selection write failed/);
+	actions.clear();
+	events.get('file-menu')(menu, selection[0]);
+	assert.deepEqual([...actions.keys()], ['Folder fusion']);
+	plugin.app.vault.adapter.write = async (_path, value) => { content = value; };
+	actions.get('Folder fusion')();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(content, 'Third\n\n');
 });
 
 test('settings use the declarative API and expose every saved option to search', async () => {
@@ -498,14 +573,14 @@ test('numbering stops if another operation moves an item outside the selected fo
 test('Folder numbering is offered on folders and the menu applies numbering', async () => {
 	const plugin = await pluginWithFiles({ 'Book/Alpha.md': 'Alpha' });
 	let onMenu;
-	plugin.app.workspace = { on: (name, callback) => { onMenu = callback; } };
+	plugin.app.workspace = { on: (name, callback) => { if (name === 'file-menu') onMenu = callback; else assert.equal(name, 'files-menu'); } };
 	plugin.addSettingTab = () => {};
 	plugin.registerEvent = () => {};
 	await plugin.onload();
 	const actions = new Map();
 	const menu = { addItem: callback => callback({ setTitle(title) { this.title = title; return this; }, onClick(callback) { actions.set(this.title, callback); } }) };
 	onMenu(menu, plugin.app.vault.getAbstractFileByPath('Book/Alpha.md'));
-	assert.equal(actions.size, 0);
+	assert.deepEqual([...actions.keys()], ['Folder fusion']);
 	onMenu(menu, plugin.app.vault.getAbstractFileByPath('Book'));
 	assert.deepEqual([...actions.keys()], ['Folder fusion', 'Folder numbering']);
 	notices.length = 0;

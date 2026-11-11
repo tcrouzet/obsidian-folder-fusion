@@ -54,17 +54,15 @@ export default class FolderFusion extends Plugin {
 		this.addSettingTab(new FolderFusionSettingTab(this.app, this));
 
 		this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
-			// Vérifier si l'élément cliqué est un dossier
-			if (file instanceof TFolder) {
-				// Ajouter une commande d'exportation au menu contextuel
-				menu.addItem((item) => {
-					item.setTitle('Folder fusion')
-						.onClick(() => {
-							this.exportFolder(file.path).catch((error: unknown) => {
-								new Notice(`Folder fusion failed: ${error instanceof Error ? error.message : String(error)}`);
-							});
-						});
+			menu.addItem(item => {
+				item.setTitle('Folder fusion').onClick(() => {
+					const exported = file instanceof TFolder ? this.exportFolder(file.path) : this.exportSelection([file]);
+					exported.catch((error: unknown) => {
+						new Notice(`Folder fusion failed: ${error instanceof Error ? error.message : String(error)}`);
+					});
 				});
+			});
+			if (file instanceof TFolder) {
 
 				menu.addItem(item => {
 					item.setTitle('Folder numbering').onClick(() => {
@@ -89,11 +87,37 @@ export default class FolderFusion extends Plugin {
 
 			}
 		}));
+		this.registerEvent(this.app.workspace.on('files-menu', (menu, files) => {
+			if (!files.length) return;
+			const selection = [...files];
+			menu.addItem(item => {
+				item.setTitle('Folder fusion').onClick(() => {
+					this.exportSelection(selection).catch((error: unknown) => {
+						new Notice(`Folder fusion failed: ${error instanceof Error ? error.message : String(error)}`);
+					});
+				});
+			});
+		}));
+
 	}
 
 	async exportFolder(folderPath: string): Promise<void> {
 		const result = await this.concatenateFiles(folderPath);
 		await this.savingFiles(folderPath, result);
+	}
+
+	async exportSelection(selection: TAbstractFile[]): Promise<void> {
+		if (!selection.length) return;
+		const firstParent = selection[0].parent;
+		if (!firstParent) throw new Error('The selected item has no parent folder.');
+		let destination = firstParent;
+		while (destination.parent) {
+			const prefix = destination.path + '/';
+			if (selection.every(file => file.path.startsWith(prefix))) break;
+			destination = destination.parent;
+		}
+		const result = await this.concatenateFiles(destination.path, selection);
+		await this.savingFiles(destination.path, result, 'selection');
 	}
 
 	async numberFolder(folderPath: string, removeNumbers = false): Promise<number> {
@@ -197,7 +221,7 @@ export default class FolderFusion extends Plugin {
 			|| (file instanceof TFile && /fusion-.*-\d{8}-\d{4}\.md$/.test(file.name));
 	}
 
-	async concatenateFiles(folderPath: string): Promise<string> {
+	async concatenateFiles(folderPath: string, selection?: TAbstractFile[]): Promise<string> {
 
 		const folder = this.app.vault.getAbstractFileByPath(folderPath);
 		if (!(folder instanceof TFolder)) {
@@ -205,10 +229,19 @@ export default class FolderFusion extends Plugin {
 		}
 
 		const files: TFile[] = [];
-		const pending = [...folder.children];
+		const pending = selection ? selection.filter(file => {
+			let entry: TAbstractFile | null = file;
+			while (entry && entry !== folder) {
+				if (this.isExcluded(entry)) return false;
+				entry = entry.parent;
+			}
+			return entry === folder;
+		}) : [...folder.children];
+		const visited = new Set<TAbstractFile>();
 		while (pending.length) {
 			const entry = pending.pop();
-			if (entry && this.isExcluded(entry)) continue;
+			if (!entry || visited.has(entry) || this.isExcluded(entry)) continue;
+			visited.add(entry);
 			if (entry instanceof TFolder) {
 				pending.push(...entry.children);
 			} else if (entry instanceof TFile) {
@@ -264,11 +297,11 @@ export default class FolderFusion extends Plugin {
 		return concatenatedContent;
 	}
 
-	async savingFiles(folderPath: string,content: string) {
-		const folderName = this.getFolderNameFromPath(folderPath);
+	async savingFiles(folderPath: string, content: string, folderName = this.getFolderNameFromPath(folderPath)) {
 		const currentDate = new Date();
 		const formattedDate = currentDate.toISOString().slice(0, 10).replace(/-/g, '') + '-' + currentDate.toISOString().slice(11, 13) + currentDate.toISOString().slice(14, 16);
-		const tempFilePath = `${folderPath}/fusion-${folderName}-${formattedDate}.md`;
+		const filename = `fusion-${folderName}-${formattedDate}.md`;
+		const tempFilePath = folderPath && folderPath !== '/' ? `${folderPath}/${filename}` : filename;
 		await this.app.vault.adapter.write(tempFilePath, content);
 	}
 
